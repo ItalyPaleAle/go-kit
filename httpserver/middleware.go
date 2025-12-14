@@ -4,8 +4,6 @@ import (
 	"net/http"
 )
 
-const HeaderXHostID = "X-Host-Id"
-
 // Middleware type is a function that takes an http.Handler and returns another http.Handler
 type Middleware func(next http.Handler) http.Handler
 
