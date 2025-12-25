@@ -9,14 +9,20 @@ package ttlcache
 import (
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/alphadose/haxmap"
+	"golang.org/x/exp/constraints"
 	kclock "k8s.io/utils/clock"
 )
 
+type cacheKey interface {
+	constraints.Integer | constraints.Float | constraints.Complex | ~string | uintptr | ~unsafe.Pointer
+}
+
 // Cache is an efficient cache with a TTL.
-type Cache[V any] struct {
-	m         *haxmap.Map[string, cacheEntry[V]]
+type Cache[K cacheKey, V any] struct {
+	m         *haxmap.Map[K, cacheEntry[V]]
 	clock     kclock.WithTicker
 	stopped   atomic.Bool
 	runningCh chan struct{}
@@ -42,17 +48,17 @@ type CacheOptions struct {
 }
 
 // NewCache returns a new cache with a TTL.
-func NewCache[V any](opts *CacheOptions) *Cache[V] {
-	var m *haxmap.Map[string, cacheEntry[V]]
+func NewCache[K cacheKey, V any](opts *CacheOptions) *Cache[K, V] {
+	var m *haxmap.Map[K, cacheEntry[V]]
 
 	if opts == nil {
 		opts = &CacheOptions{}
 	}
 
 	if opts.InitialSize > 0 {
-		m = haxmap.New[string, cacheEntry[V]](uintptr(opts.InitialSize))
+		m = haxmap.New[K, cacheEntry[V]](uintptr(opts.InitialSize))
 	} else {
-		m = haxmap.New[string, cacheEntry[V]]()
+		m = haxmap.New[K, cacheEntry[V]]()
 	}
 
 	if opts.CleanupInterval <= 0 {
@@ -63,7 +69,7 @@ func NewCache[V any](opts *CacheOptions) *Cache[V] {
 		opts.clock = kclock.RealClock{}
 	}
 
-	c := &Cache[V]{
+	c := &Cache[K, V]{
 		m:      m,
 		clock:  opts.clock,
 		maxTTL: opts.MaxTTL,
@@ -76,7 +82,7 @@ func NewCache[V any](opts *CacheOptions) *Cache[V] {
 
 // Get returns an item from the cache.
 // Items that have expired are not returned.
-func (c *Cache[V]) Get(key string) (v V, ok bool) {
+func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
 	val, ok := c.m.Get(key)
 	if !ok || !val.exp.After(c.clock.Now()) {
 		return v, false
@@ -85,7 +91,7 @@ func (c *Cache[V]) Get(key string) (v V, ok bool) {
 }
 
 // Set an item in the cache.
-func (c *Cache[V]) Set(key string, val V, ttl time.Duration) {
+func (c *Cache[K, V]) Set(key K, val V, ttl time.Duration) {
 	if ttl < time.Millisecond {
 		panic("invalid TTL: must be 1ms or greater")
 	}
@@ -102,20 +108,20 @@ func (c *Cache[V]) Set(key string, val V, ttl time.Duration) {
 }
 
 // Delete an item from the cache
-func (c *Cache[V]) Delete(key string) {
+func (c *Cache[K, V]) Delete(key K) {
 	c.m.Del(key)
 }
 
 // Cleanup removes all expired entries from the cache.
-func (c *Cache[V]) Cleanup() {
+func (c *Cache[K, V]) Cleanup() {
 	now := c.clock.Now()
 
 	// Look for all expired keys and then remove them in bulk
 	// This is more efficient than removing keys one-by-one
 	// However, this could lead to a race condition where keys that are updated after ForEach ends are deleted nevertheless.
 	// This is considered acceptable in this case as this is just a cache.
-	keys := make([]string, 0)
-	c.m.ForEach(func(k string, v cacheEntry[V]) bool {
+	keys := make([]K, 0)
+	c.m.ForEach(func(k K, v cacheEntry[V]) bool {
 		if !v.exp.After(now) {
 			keys = append(keys, k)
 		}
@@ -126,13 +132,13 @@ func (c *Cache[V]) Cleanup() {
 }
 
 // Reset removes all entries from the cache.
-func (c *Cache[V]) Reset() {
+func (c *Cache[K, V]) Reset() {
 	// Look for all keys and then remove them in bulk
 	// This is more efficient than removing keys one-by-one
 	// However, this could lead to a race condition where keys that are updated after ForEach ends are deleted nevertheless.
 	// This is considered acceptable in this case as this is just a cache.
-	keys := make([]string, 0, c.m.Len())
-	c.m.ForEach(func(k string, v cacheEntry[V]) bool {
+	keys := make([]K, 0, c.m.Len())
+	c.m.ForEach(func(k K, v cacheEntry[V]) bool {
 		keys = append(keys, k)
 		return true
 	})
@@ -140,7 +146,7 @@ func (c *Cache[V]) Reset() {
 	c.m.Del(keys...)
 }
 
-func (c *Cache[V]) startBackgroundCleanup(d time.Duration) {
+func (c *Cache[K, V]) startBackgroundCleanup(d time.Duration) {
 	c.runningCh = make(chan struct{})
 	go func() {
 		defer close(c.runningCh)
@@ -160,7 +166,7 @@ func (c *Cache[V]) startBackgroundCleanup(d time.Duration) {
 }
 
 // Stop the cache, stopping the background garbage collection process.
-func (c *Cache[V]) Stop() {
+func (c *Cache[K, V]) Stop() {
 	if c.stopped.CompareAndSwap(false, true) {
 		close(c.stopCh)
 	}
