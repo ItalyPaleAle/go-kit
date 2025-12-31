@@ -460,3 +460,151 @@ func TestMiddlewareHostIDHeader(t *testing.T) {
 		assert.Equal(t, "custom-value", rec.Header().Get("X-Custom"))
 	})
 }
+
+func TestUseFunc(t *testing.T) {
+	// testHandlerFunc is a simple handler function for testing
+	testHandlerFunc := func(message string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(message)) //nolint:errcheck
+		}
+	}
+
+	// testMiddlewareFunc is a middleware function that adds a header for testing
+	testMiddlewareFunc := func(headerName, headerValue string) MiddlewareFunc {
+		return func(next http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set(headerName, headerValue)
+				next(w, r)
+			}
+		}
+	}
+
+	t.Run("No middleware", func(t *testing.T) {
+		// Test with no middleware - should return the original handler
+		originalHandler := testHandlerFunc("test response")
+		result := UseFunc(originalHandler)
+
+		// Create a test request
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+
+		// Execute the handler
+		result(rec, req)
+
+		// Verify the response
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "test response", rec.Body.String())
+	})
+
+	t.Run("Single middleware", func(t *testing.T) {
+		// Test with a single middleware
+		originalHandler := testHandlerFunc("test response")
+		middleware := testMiddlewareFunc("X-Test", "middleware-applied")
+		result := UseFunc(originalHandler, middleware)
+
+		// Create a test request
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+
+		// Execute the handler
+		result(rec, req)
+
+		// Verify the response
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "test response", rec.Body.String())
+		assert.Equal(t, "middleware-applied", rec.Header().Get("X-Test"))
+	})
+
+	t.Run("Multiple middlewares", func(t *testing.T) {
+		// Test with multiple middlewares - they should be applied in reverse order
+		originalHandler := testHandlerFunc("test response")
+		middleware1 := testMiddlewareFunc("X-First", "first")
+		middleware2 := testMiddlewareFunc("X-Second", "second")
+		middleware3 := testMiddlewareFunc("X-Third", "third")
+
+		result := UseFunc(originalHandler, middleware1, middleware2, middleware3)
+
+		// Create a test request
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+
+		// Execute the handler
+		result(rec, req)
+
+		// Verify the response
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "test response", rec.Body.String())
+		assert.Equal(t, "first", rec.Header().Get("X-First"))
+		assert.Equal(t, "second", rec.Header().Get("X-Second"))
+		assert.Equal(t, "third", rec.Header().Get("X-Third"))
+	})
+
+	t.Run("Middleware order", func(t *testing.T) {
+		// Test that middlewares are applied in the correct order
+		var order []string
+
+		middleware1 := func(next http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, "middleware1-before")
+				next(w, r)
+				order = append(order, "middleware1-after")
+			}
+		}
+
+		middleware2 := func(next http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, "middleware2-before")
+				next(w, r)
+				order = append(order, "middleware2-after")
+			}
+		}
+
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "handler")
+			w.WriteHeader(http.StatusOK)
+		}
+
+		result := UseFunc(handler, middleware1, middleware2)
+
+		// Create a test request
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+
+		// Execute the handler
+		result(rec, req)
+
+		// Verify the order of execution
+		expectedOrder := []string{
+			"middleware2-before",
+			"middleware1-before",
+			"handler",
+			"middleware1-after",
+			"middleware2-after",
+		}
+		assert.Equal(t, expectedOrder, order)
+	})
+
+	t.Run("With http.ServeMux", func(t *testing.T) {
+		// Test that UseFunc works with http.ServeMux
+		middleware := testMiddlewareFunc("X-Mux-Test", "mux-value")
+
+		handler := testHandlerFunc("mux response")
+		wrappedHandler := UseFunc(handler, middleware)
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/test", wrappedHandler)
+
+		// Create a test request
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		rec := httptest.NewRecorder()
+
+		// Execute through the mux
+		mux.ServeHTTP(rec, req)
+
+		// Verify the response
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "mux response", rec.Body.String())
+		assert.Equal(t, "mux-value", rec.Header().Get("X-Mux-Test"))
+	})
+}
