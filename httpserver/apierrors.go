@@ -9,7 +9,7 @@ import (
 type ApiError struct {
 	Code       string            `json:"code"`
 	Message    string            `json:"message"`
-	InnerError error             `json:"innerError,omitempty"`
+	InnerError string            `json:"innerError,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 
 	httpStatus int
@@ -57,7 +57,7 @@ func (e ApiError) Clone(with ...func(*ApiError)) *ApiError {
 // This is typically used with the Clone method to add an underlying error cause to an API error response.
 func WithInnerError(innerError error) func(*ApiError) {
 	return func(e *ApiError) {
-		e.InnerError = innerError
+		e.InnerError = innerError.Error()
 	}
 }
 

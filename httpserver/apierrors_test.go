@@ -57,7 +57,7 @@ func TestNewApiError(t *testing.T) {
 			assert.Equal(t, tt.wantCode, err.Code)
 			assert.Equal(t, tt.wantStatus, err.httpStatus)
 			assert.Equal(t, tt.wantMsg, err.Message)
-			assert.Nil(t, err.InnerError)
+			assert.Empty(t, err.InnerError)
 			assert.Nil(t, err.Metadata)
 		})
 	}
@@ -254,7 +254,7 @@ func TestApiError_Clone(t *testing.T) {
 		cloned := original.Clone(WithInnerError(innerErr))
 
 		assert.NotNil(t, cloned.InnerError)
-		assert.Nil(t, original.InnerError)
+		assert.Empty(t, original.InnerError)
 	})
 
 	t.Run("clones error with metadata", func(t *testing.T) {
@@ -279,7 +279,7 @@ func TestApiError_Clone(t *testing.T) {
 
 		assert.NotNil(t, cloned.InnerError)
 		assert.NotNil(t, cloned.Metadata)
-		assert.Nil(t, original.InnerError)
+		assert.Empty(t, original.InnerError)
 		assert.Nil(t, original.Metadata)
 	})
 }
@@ -292,7 +292,7 @@ func TestWithInnerError(t *testing.T) {
 	modifier(apiErr)
 
 	require.NotNil(t, apiErr.InnerError)
-	assert.Equal(t, "test error", apiErr.InnerError.Error())
+	assert.Equal(t, "test error", apiErr.InnerError)
 }
 
 func TestWithMetadata(t *testing.T) {
@@ -324,14 +324,17 @@ func TestApiError_JSONSerialization(t *testing.T) {
 		assert.Equal(t, "Test message", result["message"])
 		assert.NotContains(t, result, "innerError")
 		assert.NotContains(t, result, "metadata")
+
+		// Verify the JSON structure matches expected format
+		expectedJSON := `{"code":"TEST_ERROR","message":"Test message"}`
+		assert.JSONEq(t, expectedJSON, string(data))
 	})
 
-	t.Run("serializes error with all fields", func(t *testing.T) {
-		err := NewApiError("TEST_ERROR", http.StatusBadRequest, "Test message").
-			Clone(
-				WithInnerError(errors.New("inner")),
-				WithMetadata(map[string]string{"key": "value"}),
-			)
+	t.Run("serializes error with inner error", func(t *testing.T) {
+		err := NewApiError(
+			"INTERNAL_ERROR", http.StatusInternalServerError, "Something went wrong",
+		).Clone(WithInnerError(errors.New("database connection timeout")))
+
 		data, jsonErr := json.Marshal(err)
 		require.NoError(t, jsonErr)
 
@@ -339,7 +342,108 @@ func TestApiError_JSONSerialization(t *testing.T) {
 		jsonErr = json.Unmarshal(data, &result)
 		require.NoError(t, jsonErr)
 
+		assert.Equal(t, "INTERNAL_ERROR", result["code"])
+		assert.Equal(t, "Something went wrong", result["message"])
 		assert.Contains(t, result, "innerError")
+		assert.Equal(t, "database connection timeout", result["innerError"])
+		assert.NotContains(t, result, "metadata")
+
+		// Verify the JSON structure
+		expectedJSON := `{
+			"code":"INTERNAL_ERROR",
+			"message":"Something went wrong",
+			"innerError":"database connection timeout"
+		}`
+		assert.JSONEq(t, expectedJSON, string(data))
+	})
+
+	t.Run("serializes error with metadata", func(t *testing.T) {
+		metadata := map[string]string{
+			"field":  "email",
+			"reason": "invalid format",
+			"value":  "not-an-email",
+		}
+		err := NewApiError(
+			"VALIDATION_ERROR", http.StatusBadRequest, "Validation failed",
+		).Clone(WithMetadata(metadata))
+
+		data, jsonErr := json.Marshal(err)
+		require.NoError(t, jsonErr)
+
+		var result map[string]any
+		jsonErr = json.Unmarshal(data, &result)
+		require.NoError(t, jsonErr)
+
+		assert.Equal(t, "VALIDATION_ERROR", result["code"])
+		assert.Equal(t, "Validation failed", result["message"])
+		assert.NotContains(t, result, "innerError")
 		assert.Contains(t, result, "metadata")
+
+		metadataMap, ok := result["metadata"].(map[string]any)
+		require.True(t, ok, "metadata should be a map")
+		assert.Equal(t, "email", metadataMap["field"])
+		assert.Equal(t, "invalid format", metadataMap["reason"])
+		assert.Equal(t, "not-an-email", metadataMap["value"])
+	})
+
+	t.Run("serializes error with both inner error and metadata", func(t *testing.T) {
+		metadata := map[string]string{
+			"userId":     "12345",
+			"resource":   "profile",
+			"attemptNum": "3",
+		}
+		err := NewApiError("UPDATE_FAILED", http.StatusConflict, "Failed to update resource").
+			Clone(
+				WithInnerError(errors.New("unique constraint violation")),
+				WithMetadata(metadata),
+			)
+
+		data, jsonErr := json.Marshal(err)
+		require.NoError(t, jsonErr)
+
+		var result map[string]any
+		jsonErr = json.Unmarshal(data, &result)
+		require.NoError(t, jsonErr)
+
+		assert.Equal(t, "UPDATE_FAILED", result["code"])
+		assert.Equal(t, "Failed to update resource", result["message"])
+		assert.Contains(t, result, "innerError")
+		assert.Equal(t, "unique constraint violation", result["innerError"])
+		assert.Contains(t, result, "metadata")
+
+		metadataMap, ok := result["metadata"].(map[string]any)
+		require.True(t, ok, "metadata should be a map")
+		assert.Equal(t, "12345", metadataMap["userId"])
+		assert.Equal(t, "profile", metadataMap["resource"])
+		assert.Equal(t, "3", metadataMap["attemptNum"])
+
+		// Verify complete JSON structure
+		expectedJSON := `{
+			"code":"UPDATE_FAILED",
+			"message":"Failed to update resource",
+			"innerError":"unique constraint violation",
+			"metadata":{
+				"userId":"12345",
+				"resource":"profile",
+				"attemptNum":"3"
+			}
+		}`
+		assert.JSONEq(t, expectedJSON, string(data))
+	})
+
+	t.Run("serializes error with empty metadata map", func(t *testing.T) {
+		err := NewApiError(
+			"ERROR", http.StatusBadRequest, "Error",
+		).Clone(WithMetadata(map[string]string{}))
+
+		data, jsonErr := json.Marshal(err)
+		require.NoError(t, jsonErr)
+
+		var result map[string]any
+		jsonErr = json.Unmarshal(data, &result)
+		require.NoError(t, jsonErr)
+
+		// Empty maps are omitted due to omitempty tag
+		assert.NotContains(t, result, "metadata")
 	})
 }
