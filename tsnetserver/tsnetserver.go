@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 )
 
@@ -32,6 +33,9 @@ type NewTSNetServerOpts struct {
 	Ephemeral bool
 	// Directory where to store tsnet's state
 	StateDir string
+	// Optional store for the IPN state
+	// Note that even when using a store, tsnet still needs to write data in StateDir
+	Store ipn.StateStore
 }
 
 // NewTSNetServer creates a new TSNetServer instance
@@ -42,6 +46,7 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 		AuthKey:   opts.AuthKey,
 		Dir:       opts.StateDir,
 		Ephemeral: opts.Ephemeral,
+		Store:     opts.Store,
 		Logf: func(format string, args ...any) {
 			tsLogger.Debug(fmt.Sprintf(format, args...))
 		},
