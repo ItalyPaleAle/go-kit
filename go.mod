@@ -5,9 +5,11 @@ go 1.26
 require (
 	github.com/alphadose/haxmap v1.4.1
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/mitchellh/go-homedir v1.1.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/exp v0.0.0-20260212183809-81e46e3db34a
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
+	sigs.k8s.io/yaml v1.6.0
 	tailscale.com v1.94.1
 )
 
@@ -58,6 +60,7 @@ require (
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
 	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.46.0 // indirect
