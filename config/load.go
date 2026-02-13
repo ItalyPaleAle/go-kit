@@ -16,11 +16,7 @@ type LoadConfigOpts struct {
 	DirName string
 }
 
-type ConfigDest interface {
-	SetLoadedConfigPath(path string)
-}
-
-func LoadConfig(dst ConfigDest, opts LoadConfigOpts) error {
+func LoadConfig(dst Base, opts LoadConfigOpts) error {
 	// Get the path to the config.yaml
 	// First, try with the env var
 	configFile := os.Getenv(opts.EnvVar)
