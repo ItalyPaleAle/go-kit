@@ -8,7 +8,7 @@ import (
 	"github.com/mitchellh/go-homedir"
 	yaml "sigs.k8s.io/yaml/goyaml.v3"
 
-	fskit "github.com/italypaleale/go-kit/fs"
+	"github.com/italypaleale/go-kit/utils"
 )
 
 type LoadConfigOpts struct {
@@ -21,7 +21,7 @@ func LoadConfig(dst Base, opts LoadConfigOpts) error {
 	// First, try with the env var
 	configFile := os.Getenv(opts.EnvVar)
 	if configFile != "" {
-		exists, _ := fskit.FileExists(configFile)
+		exists, _ := utils.FileExists(configFile)
 		if !exists {
 			return NewConfigError("Environmental variable "+opts.EnvVar+" points to a file that does not exist", "Error loading config file")
 		}
@@ -84,7 +84,7 @@ func findConfigFile(fileName string, searchPaths ...string) string {
 		}
 
 		search := filepath.Join(path, fileName)
-		exists, _ := fskit.FileExists(search)
+		exists, _ := utils.FileExists(search)
 		if exists {
 			return search
 		}
