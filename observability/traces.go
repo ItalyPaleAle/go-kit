@@ -30,7 +30,7 @@ func InitTraces(ctx context.Context, opts InitTracesOpts) (traceProvider *sdkTra
 	// Get the trace exporter
 	// If the env var OTEL_TRACES_EXPORTER is empty, we set it to "none"
 	if os.Getenv("OTEL_TRACES_EXPORTER") == "" {
-		os.Setenv("OTEL_TRACES_EXPORTER", "none")
+		_ = os.Setenv("OTEL_TRACES_EXPORTER", "none")
 	}
 	exporter, err := autoexport.NewSpanExporter(ctx)
 	if err != nil {
