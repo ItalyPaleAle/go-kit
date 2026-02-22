@@ -25,17 +25,24 @@ type TSNetServer struct {
 type NewTSNetServerOpts struct {
 	// Hostname for the node
 	Hostname string
+
 	// Auth key
 	// This is only used on first startup (or if the node key has expired and it needs to be re-authenticated)
 	// If this is empty, the auth key can also be read from the TS_AUTH_KEY env var or users can use interactive login
 	AuthKey string
+
 	// If true, makes the node ephemeral
 	Ephemeral bool
+
 	// Directory where to store tsnet's state
 	StateDir string
+
 	// Optional store for the IPN state
 	// Note that even when using a store, tsnet still needs to write data in StateDir
 	Store ipn.StateStore
+
+	// Enables debug logging
+	DebugLogging bool
 }
 
 // NewTSNetServer creates a new TSNetServer instance
@@ -47,9 +54,15 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 		Dir:       opts.StateDir,
 		Ephemeral: opts.Ephemeral,
 		Store:     opts.Store,
-		Logf: func(format string, args ...any) {
-			tsLogger.Debug(fmt.Sprintf(format, args...))
+		UserLogf: func(format string, args ...any) {
+			tsLogger.Info(fmt.Sprintf(format, args...))
 		},
+	}
+
+	if opts.DebugLogging {
+		tsrv.Logf = func(format string, args ...any) {
+			tsLogger.Debug(fmt.Sprintf(format, args...))
+		}
 	}
 
 	// Bring up the Tailscale node, this will also give us the IP
