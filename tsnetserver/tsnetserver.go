@@ -41,6 +41,11 @@ type NewTSNetServerOpts struct {
 	// Note that even when using a store, tsnet still needs to write data in StateDir
 	Store ipn.StateStore
 
+	// Tags that should be applied to this node in the tailnet, for purposes of ACL enforcement.
+	// These can be referenced from the ACL policy document.
+	// Tags are generally required when a node is authenticated using OAuth2.
+	AdvertiseTags []string
+
 	// Enables debug logging
 	DebugLogging bool
 }
@@ -57,6 +62,7 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 		UserLogf: func(format string, args ...any) {
 			tsLogger.Info(fmt.Sprintf(format, args...))
 		},
+		AdvertiseTags: opts.AdvertiseTags,
 	}
 
 	if opts.DebugLogging {
