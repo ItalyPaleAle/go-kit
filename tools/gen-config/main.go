@@ -143,7 +143,7 @@ func parseStructsInFile(fileName string) error {
 		def := structDef{
 			StructType: structType,
 		}
-		for _, line := range strings.Split(x.Doc.Text(), "\n") {
+		for line := range strings.SplitSeq(x.Doc.Text(), "\n") {
 			switch {
 			case strings.HasPrefix(line, "+name "):
 				def.Name = strings.TrimPrefix(line, "+name ")
@@ -165,8 +165,7 @@ func processStruct(structDef structDef, yamlPrefix string, parentYamlPath string
 	y := func(format string, a ...any) { fmt.Fprintf(outYAML, yamlPrefix+format, a...) }
 
 	providerName := ""
-	switch {
-	case parentYamlPath == "" && sectionName == "":
+	if parentYamlPath == "" && sectionName == "" {
 		printMarkdownHeader("## Root configuration object", outMD)
 	}
 
@@ -243,7 +242,7 @@ func processStruct(structDef structDef, yamlPrefix string, parentYamlPath string
 						y("## %s\n", fullYamlPath)
 						if field.Doc != nil && field.Doc.Text() != "" {
 							y("## Description:\n")
-							for _, line := range strings.Split(field.Doc.Text(), "\n") {
+							for line := range strings.SplitSeq(field.Doc.Text(), "\n") {
 								if line != "" {
 									y("##   %s\n", line)
 								}

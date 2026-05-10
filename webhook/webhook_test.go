@@ -23,6 +23,7 @@ type testMessageProvider struct {
 func (tmp testMessageProvider) GetPlainMessage() (string, error) {
 	return tmp.message, nil
 }
+
 func (tmp testMessageProvider) GetSlackMessage() (SlackMessage, error) {
 	return SlackMessage{
 		Text: tmp.message,
@@ -197,6 +198,9 @@ func TestWebhook(t *testing.T) {
 	})
 }
 
+// TODO
+//
+//nolint:unused
 func requireBodyEqual(t *testing.T, body io.ReadCloser, expect string) {
 	t.Helper()
 

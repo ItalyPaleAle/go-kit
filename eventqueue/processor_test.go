@@ -275,7 +275,7 @@ func TestProcessor(t *testing.T) {
 
 		// Collect
 		collected := make([]bool, count)
-		var collectedCount int64
+		collectedCount := &atomic.Int64{}
 		doneCh := make(chan struct{})
 		go func() {
 			for {
@@ -286,7 +286,7 @@ func TestProcessor(t *testing.T) {
 					n, err := strconv.Atoi(r.Name)
 					if err == nil {
 						collected[n] = true
-						atomic.AddInt64(&collectedCount, 1)
+						collectedCount.Add(1)
 					}
 				}
 			}
@@ -299,7 +299,7 @@ func TestProcessor(t *testing.T) {
 
 		// Allow for synchronization
 		assert.Eventually(t, func() bool {
-			return atomic.LoadInt64(&collectedCount) == count
+			return collectedCount.Load() == count
 		}, 5*time.Second, 50*time.Millisecond)
 		close(doneCh)
 

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// #nosec G306 -- Files written are for testing and permissions aren't relevant
 func TestWatchFolder(t *testing.T) {
 	t.Run("notifies on file creation", func(t *testing.T) {
 		dir := t.TempDir()
@@ -25,7 +26,7 @@ func TestWatchFolder(t *testing.T) {
 
 		// Create a file in the watched folder
 		filePath := filepath.Join(dir, "test.txt")
-		err = os.WriteFile(filePath, []byte("hello"), 0644)
+		err = os.WriteFile(filePath, []byte("hello"), 0o644)
 		require.NoError(t, err)
 
 		// Should receive a notification
@@ -42,7 +43,7 @@ func TestWatchFolder(t *testing.T) {
 
 		// Create a file before starting the watcher
 		filePath := filepath.Join(dir, "existing.txt")
-		err := os.WriteFile(filePath, []byte("initial"), 0644)
+		err := os.WriteFile(filePath, []byte("initial"), 0o644)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -52,7 +53,7 @@ func TestWatchFolder(t *testing.T) {
 		require.NoError(t, err)
 
 		// Modify the existing file
-		err = os.WriteFile(filePath, []byte("modified"), 0644)
+		err = os.WriteFile(filePath, []byte("modified"), 0o644)
 		require.NoError(t, err)
 
 		// Should receive a notification
@@ -76,7 +77,7 @@ func TestWatchFolder(t *testing.T) {
 		// Create multiple files in quick succession
 		for i := range 5 {
 			filePath := filepath.Join(dir, fmt.Sprintf("file%d.txt", i))
-			err = os.WriteFile(filePath, []byte("content"), 0644)
+			err = os.WriteFile(filePath, []byte("content"), 0o644)
 			require.NoError(t, err)
 		}
 
@@ -137,7 +138,7 @@ func TestWatchFolder(t *testing.T) {
 
 		// Create a file to trigger notification
 		filePath := filepath.Join(dir, "test1.txt")
-		err = os.WriteFile(filePath, []byte("hello"), 0644)
+		err = os.WriteFile(filePath, []byte("hello"), 0o644)
 		require.NoError(t, err)
 
 		// Wait for batching to complete
@@ -145,7 +146,7 @@ func TestWatchFolder(t *testing.T) {
 
 		// Create another file without draining the channel
 		filePath2 := filepath.Join(dir, "test2.txt")
-		err = os.WriteFile(filePath2, []byte("world"), 0644)
+		err = os.WriteFile(filePath2, []byte("world"), 0o644)
 		require.NoError(t, err)
 
 		// Wait for batching - this should not block even though channel has unread message

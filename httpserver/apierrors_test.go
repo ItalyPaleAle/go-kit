@@ -139,9 +139,11 @@ func TestApiError_Is(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			apiErr, ok := tt.err.(ApiError)
-			if !ok {
-				apiErr = *tt.err.(*ApiError)
+			var apiErr ApiError
+			if !errors.As(tt.err, &apiErr) {
+				var apiErrPtr *ApiError
+				require.ErrorAs(t, tt.err, &apiErrPtr)
+				apiErr = *apiErrPtr
 			}
 			assert.Equal(t, tt.want, apiErr.Is(tt.target))
 		})
@@ -210,7 +212,7 @@ func TestApiError_WriteResponse(t *testing.T) {
 			t.Cleanup(func() { _ = resp.Body.Close() })
 
 			assert.Equal(t, tt.wantStatus, resp.StatusCode)
-			assert.Equal(t, ContentTypeJson, resp.Header.Get("Content-Type"))
+			assert.Equal(t, ContentTypeJson, resp.Header.Get("Content-Type")) //nolint:testifylint // False positive
 
 			// Decode into a map since error fields cannot be unmarshaled directly
 			var result map[string]any

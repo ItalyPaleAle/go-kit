@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -238,7 +239,7 @@ func TestMiddlewareMaxBodySize(t *testing.T) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("body length: " + string(rune(len(body))))) //nolint:errcheck
+			_, _ = w.Write([]byte("body length: " + strconv.Itoa(len(body)))) //nolint:errcheck
 		})
 
 		wrappedHandler := middleware(handler)
@@ -420,7 +421,7 @@ func TestMiddlewareHostIDHeader(t *testing.T) {
 
 		// Verify the header is set (even if empty)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "", rec.Header().Get(HeaderXHostID))
+		assert.Empty(t, rec.Header().Get(HeaderXHostID))
 	})
 
 	t.Run("With Use", func(t *testing.T) {
