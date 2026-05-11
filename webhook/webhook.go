@@ -298,9 +298,11 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 		enc := json.NewEncoder(pw)
 		enc.SetEscapeHTML(false)
 		pErr := enc.Encode(message)
-		if err != nil {
+		if pErr != nil {
 			_ = pw.CloseWithError(pErr)
+			return
 		}
+		_ = pw.Close()
 	}()
 
 	// Create the request
