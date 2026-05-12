@@ -59,11 +59,7 @@ func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 	}
 
 	// Preserve the caller's display name in the From header when one is provided
-	if fromName != "" {
-		a.from = fmt.Sprintf("%s <%s>", fromName, fromAddress)
-	} else {
-		a.from = fromAddress
-	}
+	a.from = internal.FormatFromAddress(fromName, fromAddress)
 
 	return nil
 }

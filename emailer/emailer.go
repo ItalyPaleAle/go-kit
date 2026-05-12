@@ -11,6 +11,7 @@ import (
 	"github.com/italypaleale/go-kit/emailer/console"
 	"github.com/italypaleale/go-kit/emailer/internal"
 	"github.com/italypaleale/go-kit/emailer/sendgrid"
+	"github.com/italypaleale/go-kit/emailer/smtp"
 )
 
 // Emailer is the interface for objects that send email notifications
@@ -51,6 +52,8 @@ func NewEmailer(ctx context.Context, opts NewEmailerOpts) (Emailer, error) {
 		e = &awsses.AWSSES{}
 	case "sendgrid":
 		e = &sendgrid.SendGridEmailer{}
+	case "smtp":
+		e = &smtp.SMTPEmailer{}
 	case "console":
 		opts.Logger.WarnContext(ctx, "The 'console' emailer is meant to be used for development only")
 		e = &console.ConsoleEmailer{}
@@ -59,7 +62,10 @@ func NewEmailer(ctx context.Context, opts NewEmailerOpts) (Emailer, error) {
 	}
 
 	// Init the emailer
-	err = e.Init(ctx, internal.InitOpts{})
+	err = e.Init(ctx, internal.InitOpts{
+		ConnString: connString,
+		Logger:     opts.Logger,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to init email sender '%s': %w", connString.Scheme, err)
 	}
