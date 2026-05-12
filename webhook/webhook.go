@@ -37,19 +37,6 @@ type Webhook interface {
 	SendWebhook(ctx context.Context, data MessageProvider) error
 }
 
-// SlackMessage is the type for a Slack-compatible message
-type SlackMessage struct {
-	Text string `json:"text"`
-}
-
-// MessageProvider is the interface provided by the webhook message data provider
-type MessageProvider interface {
-	// GetPlainMessage must return the message for the webhook in plain-text format
-	GetPlainMessage() (string, error)
-	// GetSlackMessage must return the message for the webhook in Slack-compatible format
-	GetSlackMessage() (SlackMessage, error)
-}
-
 // Webhook client
 type webhookClient struct {
 	format            WebhookFormat
