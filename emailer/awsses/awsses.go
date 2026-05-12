@@ -1,27 +1,38 @@
 package awsses
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/sesv2"
-	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/italypaleale/go-kit/emailer/internal"
 )
 
-// AWSSES is an Emailer that uses AWS SES.
+// AWSSES is an Emailer that uses AWS SES
 type AWSSES struct {
-	sesClient *sesv2.Client
-	from      string
+	accessKeyID     string
+	secretAccessKey string
+	sessionToken    string
+	region          string
+	from            string
+	endpoint        string
+	httpClient      *http.Client
+	now             func() time.Time
 }
 
+// Init validates the connection string and stores the static AWS configuration used for signed SES requests
 func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 	const connStringFormat = "awsses://<access-key-id>:<secret-access-key>@<region>?fromAddress=<address>&fromName=<name>"
 
 	// Validate the fields in the connection string
+	if opts.ConnString.Scheme != "awsses" {
+		return fmt.Errorf("invalid connection string scheme; required format is '%s'", connStringFormat)
+	}
 	accessKeyID := opts.ConnString.User.Username()
 	secretAccessKey, _ := opts.ConnString.User.Password()
 	region := opts.ConnString.Hostname()
@@ -37,56 +48,103 @@ func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
 
+	// Persist the static credentials and endpoint so SendEmail can stay allocation-light
+	a.accessKeyID = accessKeyID
+	a.secretAccessKey = secretAccessKey
+	a.sessionToken = opts.ConnString.Query().Get("sessionToken")
+	a.region = region
+	a.endpoint = "https://email." + region + ".amazonaws.com"
+	if a.now == nil {
+		a.now = time.Now
+	}
+
+	// Preserve the caller's display name in the From header when one is provided
 	if fromName != "" {
-		a.from = fmt.Sprintf("%s <%s>", fromAddress, fromName)
+		a.from = fmt.Sprintf("%s <%s>", fromName, fromAddress)
 	} else {
 		a.from = fromAddress
 	}
 
-	// Initialize AWS SES client
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(region),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to initialize AWS SES v2 client: %w", err)
-	}
-	a.sesClient = sesv2.NewFromConfig(cfg)
-
 	return nil
 }
 
+// SendEmail posts a simple SES v2 payload and signs the request with AWS Signature Version 4
 func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
-	body := &sesv2types.Body{
-		Text: &sesv2types.Content{
-			Data:    &message.Text,
-			Charset: new("UTF-8"),
-		},
-	}
-	if message.HTML != "" {
-		body.Html = &sesv2types.Content{
-			Data:    &message.HTML,
-			Charset: new("UTF-8"),
-		}
-	}
-
-	_, err := a.sesClient.SendEmail(ctx, &sesv2.SendEmailInput{
-		Content: &sesv2types.EmailContent{
-			Simple: &sesv2types.Message{
-				Body: body,
-				Subject: &sesv2types.Content{
-					Data:    &subject,
-					Charset: new("UTF-8"),
+	// Build the smallest SES v2 payload that matches the Emailer interface
+	payloadBody := sendEmailRequest{
+		Content: sendEmailContent{
+			Simple: &sendEmailMessage{
+				Body: sendEmailBody{
+					Text: &sendEmailContentValue{
+						Charset: "UTF-8",
+						Data:    message.Text,
+					},
+				},
+				Subject: sendEmailContentValue{
+					Charset: "UTF-8",
+					Data:    subject,
 				},
 			},
 		},
-		Destination: &sesv2types.Destination{
+		Destination: sendEmailDestination{
 			ToAddresses: []string{toEmail},
 		},
-		FromEmailAddress: new(a.from),
-	})
+		FromEmailAddress: a.from,
+	}
+	if message.HTML != "" {
+		payloadBody.Content.Simple.Body.HTML = &sendEmailContentValue{
+			Charset: "UTF-8",
+			Data:    message.HTML,
+		}
+	}
+
+	// Encode the request body once so the same bytes can be signed and transmitted
+	payload, err := json.Marshal(payloadBody)
 	if err != nil {
-		return fmt.Errorf("failed to send email: %w", err)
+		return fmt.Errorf("failed to marshal email payload: %w", err)
+	}
+
+	// Bound the outbound request so a slow SES endpoint does not stall the caller indefinitely
+	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, a.endpoint+"/v2/email/outbound-emails", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Use the injected clock in tests while remaining safe for manually constructed instances
+	requestTime := time.Now().UTC()
+	if a.now != nil {
+		requestTime = a.now().UTC()
+	}
+
+	// Sign the final request bytes so SES can authenticate the caller without the AWS SDK
+	err = a.signRequest(req, payload, requestTime)
+	if err != nil {
+		return fmt.Errorf("failed to sign request: %w", err)
+	}
+
+	// Allow tests to inject a local client while defaulting to the shared HTTP transport in production
+	client := a.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	// Always drain and close the response body so the connection can be reused by the transport
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+
+	// Bubble up the SES response body because it usually contains the rejection reason
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to send email (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return nil
