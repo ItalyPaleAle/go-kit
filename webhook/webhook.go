@@ -52,9 +52,10 @@ type MessageProvider interface {
 
 // Webhook client
 type webhookClient struct {
-	format     WebhookFormat
-	webhookURL string
-	webhookKey string
+	format            WebhookFormat
+	webhookURL        string
+	webhookKey        string
+	webhookAuthHeader string
 
 	log        *slog.Logger
 	httpClient *http.Client
@@ -67,6 +68,10 @@ type NewWebhookOpts struct {
 	// Key is the optional key for the webhook
 	// This is passed as-is in the Authorization header, so make sure to include amy prefix (like "Bearer" or "APIKey") if needed
 	Key string
+	// AuthorizationHeader is the name of the header that includes the authorization key
+	// This is ignored when format is "discord" or "slack"
+	// If empty, defaults to "Authorization"
+	AuthorizationHeader string
 	// Format is the webhook format
 	// If empty, defaults to "plain"
 	Format WebhookFormat
@@ -126,9 +131,10 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 
 	// Create the webhook client object
 	w := &webhookClient{
-		format:     opts.Format,
-		webhookURL: opts.URL,
-		webhookKey: opts.Key,
+		format:            opts.Format,
+		webhookURL:        opts.URL,
+		webhookKey:        opts.Key,
+		webhookAuthHeader: opts.AuthorizationHeader,
 
 		log:        opts.Logger,
 		httpClient: httpClient,
@@ -279,7 +285,13 @@ func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl stri
 	req.Header.Set("Content-Type", "text/plain")
 
 	if w.webhookKey != "" {
-		req.Header.Set("Authorization", w.webhookKey)
+		// Get header name, defaults to "Authorization"
+		headerName := w.webhookAuthHeader
+		if headerName == "" {
+			headerName = "Authorization"
+		}
+
+		req.Header.Set(headerName, w.webhookKey)
 	}
 
 	return req, nil

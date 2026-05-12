@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clocktesting "k8s.io/utils/clock/testing"
 
@@ -168,7 +169,32 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.Equal(t, "http://198.51.100.10/endpoint", req.URL.String())
 		require.Equal(t, "text/plain", req.Header.Get("Content-Type"))
 		require.Equal(t, "Bearer secret-token", req.Header.Get("Authorization"))
-		requireBodyEqual(t, req.Body, "plain message body")
+		assertBodyEqual(t, req.Body, "plain message body")
+	})
+
+	t.Run("plain webhook uses the configured authorization header", func(t *testing.T) {
+		wh, _ := newTestWebhookClient(t, NewWebhookOpts{
+			Format:              FormatPlain,
+			Key:                 "Bearer secret-token",
+			AuthorizationHeader: "X-Webhook-Key",
+		})
+
+		rtt := &testutils.RoundTripperTest{}
+		reqCh := make(chan *http.Request, 1)
+		resCh := make(chan *http.Response, 1)
+		rtt.SetReqCh(reqCh)
+		rtt.SetResponsesCh(resCh)
+		resCh <- httpResponse(t, http.StatusNoContent) //nolint:bodyclose
+		wh.httpClient.Transport = rtt
+
+		err := wh.SendWebhook(t.Context(), testMessageProvider{message: "plain message body"})
+		require.NoError(t, err)
+
+		req := <-reqCh
+		defer req.Body.Close()
+		assert.Empty(t, req.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer secret-token", req.Header.Get("X-Webhook-Key"))
+		assertBodyEqual(t, req.Body, "plain message body")
 	})
 
 	t.Run("slack-compatible webhooks send JSON without HTML escaping", func(t *testing.T) {
@@ -193,7 +219,32 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, "application/json", req.Header.Get("Content-Type"))
 		require.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
-		requireBodyEqual(t, req.Body, `{"text":"hello <team> & friends"}`+"\n")
+		assertBodyEqual(t, req.Body, `{"text":"hello <team> & friends"}`+"\n")
+	})
+
+	t.Run("slack-compatible webhooks ignore the configured authorization header", func(t *testing.T) {
+		wh, _ := newTestWebhookClient(t, NewWebhookOpts{
+			Format:              FormatSlack,
+			Key:                 "ApiKey test-key",
+			AuthorizationHeader: "X-Webhook-Key",
+		})
+
+		rtt := &testutils.RoundTripperTest{}
+		reqCh := make(chan *http.Request, 1)
+		resCh := make(chan *http.Response, 1)
+		rtt.SetReqCh(reqCh)
+		rtt.SetResponsesCh(resCh)
+		resCh <- httpResponse(t, http.StatusOK) //nolint:bodyclose
+		wh.httpClient.Transport = rtt
+
+		err := wh.SendWebhook(t.Context(), testMessageProvider{message: "hello slack"})
+		require.NoError(t, err)
+
+		req := <-reqCh
+		defer req.Body.Close()
+		assert.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
+		assert.Empty(t, req.Header.Get("X-Webhook-Key"))
+		assertBodyEqual(t, req.Body, `{"text":"hello slack"}`+"\n")
 	})
 
 	t.Run("Discord webhooks reuse the slack-compatible formatter", func(t *testing.T) {
@@ -203,7 +254,32 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.NoError(t, err)
 		defer req.Body.Close()
 		require.Equal(t, "application/json", req.Header.Get("Content-Type"))
-		requireBodyEqual(t, req.Body, `{"text":"discord payload"}`+"\n")
+		assertBodyEqual(t, req.Body, `{"text":"discord payload"}`+"\n")
+	})
+
+	t.Run("Discord webhooks ignore the configured authorization header", func(t *testing.T) {
+		wh, _ := newTestWebhookClient(t, NewWebhookOpts{
+			Format:              FormatDiscord,
+			Key:                 "ApiKey test-key",
+			AuthorizationHeader: "X-Webhook-Key",
+		})
+
+		rtt := &testutils.RoundTripperTest{}
+		reqCh := make(chan *http.Request, 1)
+		resCh := make(chan *http.Response, 1)
+		rtt.SetReqCh(reqCh)
+		rtt.SetResponsesCh(resCh)
+		resCh <- httpResponse(t, http.StatusOK) //nolint:bodyclose
+		wh.httpClient.Transport = rtt
+
+		err := wh.SendWebhook(t.Context(), testMessageProvider{message: "hello discord"})
+		require.NoError(t, err)
+
+		req := <-reqCh
+		defer req.Body.Close()
+		assert.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
+		assert.Empty(t, req.Header.Get("X-Webhook-Key"))
+		assertBodyEqual(t, req.Body, `{"text":"hello discord"}`+"\n")
 	})
 }
 
@@ -464,13 +540,13 @@ func TestWebhook(t *testing.T) {
 	})
 }
 
-func requireBodyEqual(t *testing.T, body io.ReadCloser, expect string) {
+func assertBodyEqual(t *testing.T, body io.ReadCloser, expect string) {
 	t.Helper()
 
 	read, err := io.ReadAll(body)
 	require.NoError(t, err, "failed to read body")
 
-	require.Equal(t, expect, string(read))
+	assert.Equal(t, expect, string(read))
 }
 
 // Asserts that the code retries the desired number of times
