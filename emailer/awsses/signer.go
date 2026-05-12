@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,7 +17,7 @@ import (
 func (a AWSSES) signRequest(req *http.Request, payload []byte, requestTime time.Time) error {
 	// Refuse to sign requests that were built from an incomplete AWSSES instance
 	if a.accessKeyID == "" || a.secretAccessKey == "" || a.region == "" {
-		return fmt.Errorf("AWS SES client is not initialized")
+		return errors.New("AWS SES client is not initialized")
 	}
 
 	// Derive the timestamp and payload digest once because both are reused across the signature inputs
@@ -153,7 +154,7 @@ func awsURLEscape(value string) string {
 	// Go's standard query escaping does not match AWS's byte-for-byte uppercase hex rules
 	var out strings.Builder
 	out.Grow(int(float64(len(value)) * 1.2))
-	for i := 0; i < len(value); i++ {
+	for i := range value {
 		b := value[i]
 		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '-' || b == '.' || b == '_' || b == '~' {
 			out.WriteByte(b)

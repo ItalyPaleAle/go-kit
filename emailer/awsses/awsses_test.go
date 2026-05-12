@@ -2,11 +2,11 @@ package awsses
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -35,42 +35,89 @@ func TestInit(t *testing.T) {
 }
 
 func TestSendEmail(t *testing.T) {
-	// Capture the outgoing request so the test can validate the translated SES payload
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/v2/email/outbound-emails", r.URL.Path)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+	// Validate the translated request outside the handler so the test never fails from a server goroutine
+	validateRequest := func(r *http.Request) error {
+		if r.Method != http.MethodPost {
+			return fmt.Errorf("unexpected method: %s", r.Method)
+		}
+		if r.URL.Path != "/v2/email/outbound-emails" {
+			return fmt.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			return fmt.Errorf("unexpected content type: %s", r.Header.Get("Content-Type"))
+		}
 
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("read request body: %w", err)
+		}
 
 		var payload map[string]any
 		err = json.Unmarshal(body, &payload)
-		require.NoError(t, err)
+		if err != nil {
+			return fmt.Errorf("unmarshal payload: %w", err)
+		}
 
 		// Assert the Emailer abstraction is translated into the SES JSON shape we expect
-		assert.Equal(t, "Sender <sender@example.com>", payload["FromEmailAddress"])
+		if payload["FromEmailAddress"] != "Sender <sender@example.com>" {
+			return fmt.Errorf("unexpected from address: %#v", payload["FromEmailAddress"])
+		}
 
 		destination, ok := payload["Destination"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, []any{"recipient@example.com"}, destination["ToAddresses"])
+		if !ok {
+			return fmt.Errorf("destination has unexpected type: %#v", payload["Destination"])
+		}
+		if !assert.ObjectsAreEqual([]any{"recipient@example.com"}, destination["ToAddresses"]) {
+			return fmt.Errorf("unexpected to addresses: %#v", destination["ToAddresses"])
+		}
 
 		content, ok := payload["Content"].(map[string]any)
-		require.True(t, ok)
+		if !ok {
+			return fmt.Errorf("content has unexpected type: %#v", payload["Content"])
+		}
 		simple, ok := content["Simple"].(map[string]any)
-		require.True(t, ok)
+		if !ok {
+			return fmt.Errorf("simple content has unexpected type: %#v", content["Simple"])
+		}
 		subject, ok := simple["Subject"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "Hello", subject["Data"])
+		if !ok {
+			return fmt.Errorf("subject has unexpected type: %#v", simple["Subject"])
+		}
+		if subject["Data"] != "Hello" {
+			return fmt.Errorf("unexpected subject: %#v", subject["Data"])
+		}
 
 		bodyMap, ok := simple["Body"].(map[string]any)
-		require.True(t, ok)
+		if !ok {
+			return fmt.Errorf("body has unexpected type: %#v", simple["Body"])
+		}
 		text, ok := bodyMap["Text"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "Plain body", text["Data"])
+		if !ok {
+			return fmt.Errorf("text body has unexpected type: %#v", bodyMap["Text"])
+		}
+		if text["Data"] != "Plain body" {
+			return fmt.Errorf("unexpected text body: %#v", text["Data"])
+		}
 		html, ok := bodyMap["Html"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "<p>HTML body</p>", html["Data"])
+		if !ok {
+			return fmt.Errorf("html body has unexpected type: %#v", bodyMap["Html"])
+		}
+		if html["Data"] != "<p>HTML body</p>" {
+			return fmt.Errorf("unexpected html body: %#v", html["Data"])
+		}
+
+		return nil
+	}
+	handlerErrCh := make(chan error, 1)
+
+	// Capture the outgoing request so the test can validate the translated SES payload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := validateRequest(r)
+		handlerErrCh <- err
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"MessageId":"msg-123"}`))
@@ -93,6 +140,7 @@ func TestSendEmail(t *testing.T) {
 		HTML: "<p>HTML body</p>",
 	})
 	require.NoError(t, err)
+	require.NoError(t, <-handlerErrCh)
 }
 
 func TestSendEmailReturnsRemoteErrors(t *testing.T) {
@@ -116,6 +164,6 @@ func TestSendEmailReturnsRemoteErrors(t *testing.T) {
 	// The returned error should preserve both the status code and the SES message text
 	err := emailer.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "failed to send email (400):"))
-	assert.True(t, strings.Contains(err.Error(), "MessageRejected"))
+	require.ErrorContains(t, err, "failed to send email (400):")
+	require.ErrorContains(t, err, "MessageRejected")
 }
