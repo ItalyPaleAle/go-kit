@@ -113,9 +113,7 @@ func run(inPath, jsonPath, yamlPath, pathPrefix, title, description string) erro
 // schemaRefRe matches $ref values pointing into #/components/schemas/
 var schemaRefRe = regexp.MustCompile(`"\$ref":\s*"#/components/schemas/([^"]+)"`)
 
-// filterDoc returns a copy of docJSON with only paths that start with prefix,
-// unreferenced component schemas pruned, unreferenced security schemes pruned,
-// and info.title / info.description overridden when non-empty.
+// filterDoc returns a copy of docJSON with only paths that start with prefix, unreferenced component schemas pruned, unreferenced security schemes pruned, and info.title / info.description overridden when non-empty
 func filterDoc(docJSON []byte, prefix, title, description string) ([]byte, error) {
 	var doc map[string]any
 	err := json.Unmarshal(docJSON, &doc)
@@ -149,8 +147,7 @@ func filterDoc(docJSON []byte, prefix, title, description string) ([]byte, error
 		return nil, fmt.Errorf("marshal filtered paths: %w", err)
 	}
 
-	// Collect all component schema names referenced by the kept paths,
-	// then expand transitively through the schemas themselves
+	// Collect all component schema names referenced by the kept paths, then expand transitively through the schemas themselves
 	components, _ := doc["components"].(map[string]any)
 	if components != nil {
 		err = pruneSchemas(components, filteredJSON)
@@ -179,8 +176,7 @@ func collectSchemaRefs(src []byte) map[string]bool {
 	return refs
 }
 
-// pruneSchemas removes schemas from components that are not reachable from the
-// paths JSON, resolving transitive references inside schemas themselves.
+// pruneSchemas removes schemas from components that are not reachable from the paths JSON, resolving transitive references inside schemas themselves
 func pruneSchemas(components map[string]any, pathsJSON []byte) error {
 	schemas, _ := components["schemas"].(map[string]any)
 	if schemas == nil {
@@ -221,8 +217,7 @@ func pruneSchemas(components map[string]any, pathsJSON []byte) error {
 	return nil
 }
 
-// pruneSecuritySchemes removes security scheme entries that are not used by any
-// operation in filteredPaths.
+// pruneSecuritySchemes removes security scheme entries that are not used by any operation in filteredPaths
 func pruneSecuritySchemes(components map[string]any, filteredPaths map[string]any) {
 	secSchemes, _ := components["securitySchemes"].(map[string]any)
 	if secSchemes == nil {
@@ -239,8 +234,7 @@ func pruneSecuritySchemes(components map[string]any, filteredPaths map[string]an
 	}
 }
 
-// collectUsedSecuritySchemes walks v recursively and collects all security scheme
-// names that appear as keys in "security" array entries.
+// collectUsedSecuritySchemes walks v recursively and collects all security scheme names that appear as keys in "security" array entries
 func collectUsedSecuritySchemes(v any, used map[string]bool) {
 	switch t := v.(type) {
 	case map[string]any:
@@ -270,9 +264,11 @@ func writeFile(path string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
+
 	err = os.WriteFile(path, data, 0o600)
 	if err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+
 	return nil
 }

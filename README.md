@@ -28,6 +28,7 @@ A collection of utility packages for Go applications.
 ## Tools
 
 - **gen-config**: Generates sample YAML and Markdown documentation from a config struct and can update the README config table.
+- **openapi-convert**: Converts a Swagger 2.0 JSON document into OpenAPI 3 output (YAML and JSON).
 
 ## Documentation
 

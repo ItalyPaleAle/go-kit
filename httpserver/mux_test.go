@@ -355,7 +355,7 @@ func TestMux_PatternFormats(t *testing.T) {
 		v1 := m.Group("/v1")
 		v1.HandleFunc("/anything", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(r.Method)) //nolint:errcheck
+			_, _ = w.Write([]byte(r.Method)) //nolint:errcheck,gosec
 		})
 
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut} {
@@ -373,7 +373,7 @@ func TestMux_PatternFormats(t *testing.T) {
 		v1 := m.Group("/v1")
 		v1.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(r.PathValue("id"))) //nolint:errcheck
+			_, _ = w.Write([]byte(r.PathValue("id"))) //nolint:errcheck,gosec
 		})
 
 		req := httptest.NewRequest(http.MethodGet, "/v1/users/42", nil)
