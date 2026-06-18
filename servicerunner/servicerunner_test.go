@@ -3,6 +3,7 @@ package servicerunner
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,5 +117,54 @@ func TestServiceRunner_Run(t *testing.T) {
 		// Check that both errors are included
 		require.ErrorIs(t, err, err1)
 		require.ErrorIs(t, err, err2)
+	})
+
+	t.Run("error cancels a sibling blocked on context", func(t *testing.T) {
+		expectedErr := errors.New("service failed")
+		errorService := func(ctx context.Context) error {
+			return expectedErr
+		}
+
+		// This sibling only returns once the runner cancels the context
+		// Before the fix Run drained every result before canceling, so it would block here forever
+		var cancelObserved atomic.Bool
+		blockingService := func(ctx context.Context) error {
+			<-ctx.Done()
+			cancelObserved.Store(true)
+			return ctx.Err()
+		}
+
+		runner := NewServiceRunner(errorService, blockingService)
+
+		// The timeout is a backstop: a correct implementation returns well before it
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		err := runner.Run(ctx)
+		require.ErrorIs(t, err, expectedErr)
+		require.True(t, cancelObserved.Load(), "the blocking sibling should observe cancellation when the first service exits with an error")
+	})
+
+	t.Run("clean return cancels a sibling blocked on context", func(t *testing.T) {
+		// A service that returns nil must still cancel the blocking sibling, otherwise Run would hang waiting for it
+		quickService := func(ctx context.Context) error {
+			return nil
+		}
+
+		var cancelObserved atomic.Bool
+		blockingService := func(ctx context.Context) error {
+			<-ctx.Done()
+			cancelObserved.Store(true)
+			return ctx.Err()
+		}
+
+		runner := NewServiceRunner(quickService, blockingService)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		err := runner.Run(ctx)
+		require.NoError(t, err)
+		require.True(t, cancelObserved.Load(), "the blocking sibling should observe cancellation even after a clean return")
 	})
 }

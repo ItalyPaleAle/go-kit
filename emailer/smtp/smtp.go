@@ -82,6 +82,16 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
 
+	// Reject CR/LF in the sender fields so they cannot inject extra headers into every message sent by this emailer
+	err = validateHeaderValue("from address", fromAddress)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
+	err = validateHeaderValue("from name", fromName)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
+
 	s.host = host
 	s.port = port
 	s.address = net.JoinHostPort(host, port)
@@ -178,6 +188,16 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 
 // buildMessage renders a UTF-8 MIME email with either one body part or multipart/alternative
 func (s SMTPEmailer) buildMessage(toEmail string, subject string, message internal.SendEmailMessage) ([]byte, error) {
+	// Reject CR/LF in the caller-supplied header values so a crafted recipient or subject cannot inject extra headers or a second body
+	err := validateHeaderValue("recipient address", toEmail)
+	if err != nil {
+		return nil, err
+	}
+	err = validateHeaderValue("subject", subject)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build the MIME body first because the top-level headers depend on whether the message is multipart
 	body, contentType, transferEncoding, err := buildMIMEBody(message)
 	if err != nil {
@@ -349,6 +369,15 @@ func encodeBodyPart(value string) ([]byte, error) {
 	}
 
 	return body.Bytes(), nil
+}
+
+// validateHeaderValue rejects values containing CR or LF, which could otherwise inject additional SMTP headers or a second message body
+func validateHeaderValue(field string, value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("invalid %s: must not contain CR or LF characters", field)
+	}
+
+	return nil
 }
 
 // encodeHeader applies RFC2047 encoding only when the header contains non-ASCII content

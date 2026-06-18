@@ -36,7 +36,6 @@ func InitTraces(ctx context.Context, opts InitTracesOpts) (traceProvider *sdkTra
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize OpenTelemetry span exporter: %w", err)
 	}
-	shutdownFn = exporter.Shutdown
 
 	// Init the trace provider
 	tracerOpts := []sdkTrace.TracerProviderOption{
@@ -52,6 +51,9 @@ func InitTraces(ctx context.Context, opts InitTracesOpts) (traceProvider *sdkTra
 	otel.SetTextMapPropagator(
 		propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
 	)
+
+	// Return the provider's Shutdown
+	shutdownFn = traceProvider.Shutdown
 
 	return traceProvider, shutdownFn, nil
 }

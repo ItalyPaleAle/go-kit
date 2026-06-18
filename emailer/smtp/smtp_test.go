@@ -77,6 +77,51 @@ func TestSendEmail(t *testing.T) {
 	assert.Contains(t, session.commands, "RCPT TO:<recipient@example.com>")
 }
 
+func TestInitRejectsHeaderInjection(t *testing.T) {
+	t.Run("CRLF in from address is rejected", func(t *testing.T) {
+		// %0d%0a decodes to CR/LF in the query value, simulating an attacker-controlled fromAddress
+		connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com%0d%0aBcc:+attacker@evil.example&tls=none")
+		require.NoError(t, err)
+
+		var emailer SMTPEmailer
+		err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+		require.ErrorContains(t, err, "from address")
+		require.ErrorContains(t, err, "must not contain CR or LF")
+	})
+
+	t.Run("CRLF in from name is rejected", func(t *testing.T) {
+		connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com&fromName=Joe%0d%0aBcc:+attacker@evil.example&tls=none")
+		require.NoError(t, err)
+
+		var emailer SMTPEmailer
+		err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+		require.ErrorContains(t, err, "from name")
+		require.ErrorContains(t, err, "must not contain CR or LF")
+	})
+}
+
+func TestSendEmailRejectsHeaderInjection(t *testing.T) {
+	// Configure a valid emailer; buildMessage validates before any network dial, so no server is needed
+	connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com&tls=none")
+	require.NoError(t, err)
+
+	var emailer SMTPEmailer
+	err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+	require.NoError(t, err)
+
+	t.Run("CRLF in recipient is rejected", func(t *testing.T) {
+		err := emailer.SendEmail(t.Context(), "victim@example.com\r\nBcc: attacker@evil.example", "Hello", internal.SendEmailMessage{Text: "Body"})
+		require.ErrorContains(t, err, "recipient address")
+		require.ErrorContains(t, err, "must not contain CR or LF")
+	})
+
+	t.Run("bare LF in subject is rejected", func(t *testing.T) {
+		err := emailer.SendEmail(t.Context(), "recipient@example.com", "Hello\nBcc: attacker@evil.example", internal.SendEmailMessage{Text: "Body"})
+		require.ErrorContains(t, err, "subject")
+		require.ErrorContains(t, err, "must not contain CR or LF")
+	})
+}
+
 type smtpTestSession struct {
 	authCommand string
 	mailFrom    string
