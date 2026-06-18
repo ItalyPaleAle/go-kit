@@ -91,6 +91,7 @@ func (c *Cache[K, V]) Get(key K) (v V, ok bool) {
 }
 
 // Set an item in the cache.
+// TTL must be at least 1ms.
 func (c *Cache[K, V]) Set(key K, val V, ttl time.Duration) {
 	if ttl < time.Millisecond {
 		panic("invalid TTL: must be 1ms or greater")
