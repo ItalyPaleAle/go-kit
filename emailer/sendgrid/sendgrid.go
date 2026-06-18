@@ -14,8 +14,9 @@ import (
 
 // SendGridEmailer is an Emailer that uses SendGrid.
 type SendGridEmailer struct {
-	apiKey string
-	from   SendGridEmail
+	apiKey     string
+	from       SendGridEmail
+	httpClient *http.Client
 }
 
 func (s *SendGridEmailer) Init(ctx context.Context, opts internal.InitOpts) error {
@@ -25,7 +26,8 @@ func (s *SendGridEmailer) Init(ctx context.Context, opts internal.InitOpts) erro
 	if opts.ConnString.Scheme != "sendgrid" {
 		return fmt.Errorf("invalid connection string scheme; required format is '%s'", connStringFormat)
 	}
-	s.apiKey = opts.ConnString.User.Username()
+	// The API key is exposed as the host
+	s.apiKey = opts.ConnString.Host
 	s.from.Address = opts.ConnString.Query().Get("fromAddress")
 	s.from.Name = opts.ConnString.Query().Get("fromName") // fromName is optional
 	if s.apiKey == "" {
@@ -40,12 +42,21 @@ func (s *SendGridEmailer) Init(ctx context.Context, opts internal.InitOpts) erro
 
 // SendEmail sends an email using SendGrid.
 func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
+	// Build the v3 mail/send content array with text/plain first, adding text/html only when present
+	content := make([]SendGridContent, 1, 2)
+	content[0] = SendGridContent{Type: "text/plain", Value: message.Text}
+	if message.HTML != "" {
+		content = append(content, SendGridContent{Type: "text/html", Value: message.HTML})
+	}
+
+	// Recipients must live inside the personalizations array, not at the top level
 	body := SendGridMessage{
+		Personalizations: []SendGridPersonalization{
+			{To: []SendGridEmail{{Address: toEmail}}},
+		},
 		From:    s.from,
-		To:      SendGridEmail{Address: toEmail},
 		Subject: subject,
-		Text:    message.Text,
-		HTML:    message.HTML,
+		Content: content,
 	}
 
 	payload, err := json.Marshal(body)
@@ -64,7 +75,13 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	// Allow tests to inject a local client while defaulting to the shared HTTP transport in production
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
@@ -86,10 +103,23 @@ type SendGridEmail struct {
 	Address string `json:"email"`
 }
 
+// SendGridPersonalization is one entry in the v3 mail/send personalizations array
+// Each personalization carries the recipients for one copy of the message
+type SendGridPersonalization struct {
+	To []SendGridEmail `json:"to"`
+}
+
+// SendGridContent is one MIME part in the v3 mail/send content array
+type SendGridContent struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// SendGridMessage is the v3 mail/send request body
+// Recipients live under personalizations[].to[] and bodies under content[], with text/plain ordered before text/html
 type SendGridMessage struct {
-	From    SendGridEmail `json:"from"`
-	To      SendGridEmail `json:"to"`
-	Subject string        `json:"subject"`
-	Text    string        `json:"text,omitempty"`
-	HTML    string        `json:"html,omitempty"`
+	Personalizations []SendGridPersonalization `json:"personalizations"`
+	From             SendGridEmail             `json:"from"`
+	Subject          string                    `json:"subject"`
+	Content          []SendGridContent         `json:"content"`
 }
