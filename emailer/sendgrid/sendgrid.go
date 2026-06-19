@@ -36,6 +36,7 @@ func (s *SendGridEmailer) Init(ctx context.Context, opts internal.InitOpts) erro
 	if s.from.Address == "" {
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
+
 	err := internal.ValidateEmailAddress("from address", s.from.Address)
 	if err != nil {
 		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)

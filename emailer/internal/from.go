@@ -22,5 +22,6 @@ func ValidateEmailAddress(field, addr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid %s: %w", field, err)
 	}
+
 	return nil
 }

@@ -198,7 +198,8 @@ retryLoop:
 		}
 
 		// Drain and close the body before cancelling the context so the connection can be reused
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4<<10))
+		// Limit reading to 1KB
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<10))
 		_ = res.Body.Close()
 		reqCancel()
 

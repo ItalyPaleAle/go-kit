@@ -47,6 +47,7 @@ func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 	if fromAddress == "" {
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
+
 	err := internal.ValidateEmailAddress("from address", fromAddress)
 	if err != nil {
 		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
