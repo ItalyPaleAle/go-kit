@@ -101,13 +101,9 @@ linters:
     presets:
       - comments
       - common-false-positives
-      - legacy
-      - std-error-handling
     paths:
-      - client
       - third_party$
       - builtin$
-      - examples$
 issues:
   uniq-by-line: false
 formatters:
@@ -117,7 +113,5 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - client
       - third_party$
       - builtin$
-      - examples$
