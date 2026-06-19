@@ -174,8 +174,8 @@ retryLoop:
 
 		var res *http.Response
 		res, err = w.httpClient.Do(req)
-		reqCancel()
 		if err != nil {
+			reqCancel()
 			// Retry after 15 seconds on network failures, if we have more attempts
 			if i < (attempts - 1) {
 				w.log.WarnContext(ctx,
@@ -196,9 +196,10 @@ retryLoop:
 			break
 		}
 
-		// Drain body before closing
-		_, _ = io.Copy(io.Discard, res.Body)
+		// Drain and close the body before cancelling the context so the connection can be reused
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4<<10))
 		res.Body.Close()
+		reqCancel()
 
 		// Handle retries if we have more attempts
 		if i < (attempts - 1) {

@@ -116,7 +116,6 @@ func (t *TSNetServer) LocalClient() (*local.Client, error) {
 func (t *TSNetServer) Listen(port int) (net.Listener, error) {
 	ln, err := t.server.ListenTLS("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
-		_ = t.server.Close()
 		return nil, fmt.Errorf("failed to create tsnet listener: %w", err)
 	}
 
