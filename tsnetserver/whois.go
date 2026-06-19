@@ -22,9 +22,9 @@ type TailscaleWhoIs struct {
 	CapMap        tailcfg.PeerCapMap `json:"capMap,omitempty"`
 }
 
-// WhoIs performs a "whois" request with the LocalClient and returns information about the node.
-// WhoIs is only valid for direct tailnet connections.
-// For Funnel connections the remote address is the relay, not the real client; use FunnelClientIP instead.
+// WhoIs performs a "whois" request with the LocalClient and returns information about the node
+// WhoIs is only valid for direct tailnet connections
+// For Funnel connections the remote address is the relay, not the real client (use FunnelClientIP instead)
 func (t *TSNetServer) WhoIs(r *http.Request) (res TailscaleWhoIs, err error) {
 	// Reject Funnel requests: r.RemoteAddr is the relay address, not the real client
 	if IsFunneledRequest(r) {

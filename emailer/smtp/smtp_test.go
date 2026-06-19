@@ -101,7 +101,8 @@ func TestInitRejectsHeaderInjection(t *testing.T) {
 }
 
 func TestSendEmailRejectsHeaderInjection(t *testing.T) {
-	// Configure a valid emailer; buildMessage validates before any network dial, so no server is needed
+	// Configure a valid emailer
+	// BuildMessage validates before any network dial, so no server is needed
 	connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com&tls=none")
 	require.NoError(t, err)
 

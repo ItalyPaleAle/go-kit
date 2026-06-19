@@ -7,7 +7,8 @@ import (
 
 // Mux extends http.ServeMux with support for route groups, path prefixes, and per-group middlewares
 // It implements http.Handler so it can be passed wherever an http.Handler is expected
-// The zero value is not usable; construct one with NewMux or NewMuxFromServeMux
+// The zero value is not usable
+// Construct one with NewMux or NewMuxFromServeMux
 type Mux struct {
 	mux    *http.ServeMux
 	prefix string
@@ -61,7 +62,7 @@ func (m *Mux) Group(prefix string, middlewares ...Middleware) *Mux {
 
 // Handle registers handler for the given pattern
 // The pattern follows the standard library format: "[METHOD ][HOST]/PATH"
-// The group's prefix is inserted before PATH; PATH is given a leading slash if missing
+// The group's prefix is inserted before PATH (PATH is given a leading slash if missing)
 // Per-route middlewares apply inside the group's middlewares (they are wrapped by them)
 // Within the per-route list the last entry is outermost
 func (m *Mux) Handle(pattern string, handler http.Handler, middlewares ...Middleware) {
