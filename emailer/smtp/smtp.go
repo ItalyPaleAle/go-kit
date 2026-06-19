@@ -91,6 +91,10 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 	if err != nil {
 		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
 	}
+	err = internal.ValidateEmailAddress("from address", fromAddress)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
 
 	s.host = host
 	s.port = port
@@ -201,6 +205,10 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 func (s SMTPEmailer) buildMessage(toEmail string, subject string, message internal.SendEmailMessage) ([]byte, error) {
 	// Reject CR/LF in the caller-supplied header values so a crafted recipient or subject cannot inject extra headers or a second body
 	err := validateHeaderValue("recipient address", toEmail)
+	if err != nil {
+		return nil, err
+	}
+	err = internal.ValidateEmailAddress("recipient address", toEmail)
 	if err != nil {
 		return nil, err
 	}

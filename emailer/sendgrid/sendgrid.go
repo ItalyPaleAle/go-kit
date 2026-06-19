@@ -36,12 +36,21 @@ func (s *SendGridEmailer) Init(ctx context.Context, opts internal.InitOpts) erro
 	if s.from.Address == "" {
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
+	err := internal.ValidateEmailAddress("from address", s.from.Address)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
 
 	return nil
 }
 
 // SendEmail sends an email using SendGrid.
 func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
+	err := internal.ValidateEmailAddress("recipient address", toEmail)
+	if err != nil {
+		return err
+	}
+
 	// Build the v3 mail/send content array with text/plain first, adding text/html only when present
 	content := make([]SendGridContent, 1, 2)
 	content[0] = SendGridContent{Type: "text/plain", Value: message.Text}
@@ -91,7 +100,7 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject
 	}()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return fmt.Errorf("failed to send email (%d): %s", resp.StatusCode, string(body))
 	}
 
