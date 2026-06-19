@@ -228,7 +228,8 @@ func TestMux_GroupMiddlewareOrder(t *testing.T) {
 		rec := httptest.NewRecorder()
 		m.ServeHTTP(rec, req)
 
-		// Parent middlewares wrap the child's; within each level the last-listed is outermost
+		// Parent middlewares wrap the child's
+		// Within each level the last-listed is outermost
 		expected := []string{
 			"p2-before", "p1-before",
 			"c2-before", "c1-before",
@@ -253,7 +254,8 @@ func TestMux_GroupMiddlewareOrder(t *testing.T) {
 		rec := httptest.NewRecorder()
 		m.ServeHTTP(rec, req)
 
-		// Group middleware wraps the route middlewares; within the route list r2 wraps r1
+		// Group middleware wraps the route middlewares
+		// Within the route list r2 wraps r1
 		expected := []string{
 			"g-before",
 			"r2-before", "r1-before",
@@ -277,7 +279,8 @@ func TestMux_GroupMiddlewareOrder(t *testing.T) {
 		first := parent.Group("/first", c1)
 		first.HandleFunc("GET /x", makeOrderHandler(&order, "ok"))
 
-		// Register a sibling group with different middlewares; should not affect first
+		// Register a sibling group with different middlewares
+		// Should not affect first
 		second := parent.Group("/second", makeOrderMW(&order, "c2"))
 		second.HandleFunc("GET /x", makeOrderHandler(&order, "ok"))
 
@@ -291,7 +294,8 @@ func TestMux_GroupMiddlewareOrder(t *testing.T) {
 }
 
 func TestMux_HandleWithHandlerVsHandleFunc(t *testing.T) {
-	// Handle accepts an http.Handler; HandleFunc accepts an http.HandlerFunc.
+	// Handle accepts an http.Handler
+	// HandleFunc accepts an http.HandlerFunc.
 	// Both should produce identical behavior
 	m := NewMux()
 
@@ -368,7 +372,8 @@ func TestMux_PatternFormats(t *testing.T) {
 	})
 
 	t.Run("Path with wildcard", func(t *testing.T) {
-		// Go 1.22+ supports {name} path wildcards; the prefix must preserve them
+		// Go 1.22+ supports {name} path wildcards
+		// The prefix must preserve them
 		m := NewMux()
 		v1 := m.Group("/v1")
 		v1.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {

@@ -79,7 +79,8 @@ func TestLoad_ValidPEM(t *testing.T) {
 }
 
 func TestLoad_ValidPEMTakesPrecedenceOverPath(t *testing.T) {
-	// Create an invalid pair on disk; PEM values should still be used.
+	// Create an invalid pair on disk
+	// PEM values should still be used.
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tlsCertFile), []byte("invalid cert"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tlsKeyFile), []byte("invalid key"), 0o600))
@@ -197,8 +198,8 @@ func TestLoad_FromPath_WatchReloadsCertificates(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, updatedCert.Certificate)
 
-	// Write cert and key separately; one of the intermediate reloads may fail due to mismatch,
-	// but a subsequent event after both files are updated should succeed.
+	// Write cert and key separately
+	// One of the intermediate reloads may fail due to mismatch, but a subsequent event after both files are updated should succeed.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tlsCertFile), []byte(updatedCertPEM), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tlsKeyFile), []byte(updatedKeyPEM), 0o600))
 
@@ -232,7 +233,8 @@ func TestLoad_FromPath_WatchKeepsPreviousCertOnInvalidUpdate(t *testing.T) {
 
 	initialDER := currentLeafDER(t, tlsConfig)
 
-	// Trigger reload with invalid data; reload should fail and keep the previous cert in memory.
+	// Trigger reload with invalid data
+	// Reload should fail and keep the previous cert in memory
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tlsCertFile), []byte("invalid cert"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tlsKeyFile), []byte("invalid key"), 0o600))
 

@@ -36,17 +36,13 @@ func TestGetInstanceID(t *testing.T) {
 		assert.Equal(t, "abc/def ghi", got)
 	})
 
-	t.Run("falls back to random ID when OTEL data is invalid", func(t *testing.T) {
+	t.Run("keeps raw OTEL value when URL-decode fails (mirrors OTel SDK behavior)", func(t *testing.T) {
 		t.Setenv("CONTAINER_APP_REPLICA_NAME", "")
 		t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.instance.id=%zz")
 
 		got, err := GetInstanceID()
 		require.NoError(t, err)
-		assert.NotEmpty(t, got)
-
-		decoded, decErr := base64.RawURLEncoding.DecodeString(got)
-		require.NoError(t, decErr)
-		assert.Len(t, decoded, 7)
+		assert.Equal(t, "%zz", got)
 	})
 
 	t.Run("falls back to random ID when no env vars are set", func(t *testing.T) {

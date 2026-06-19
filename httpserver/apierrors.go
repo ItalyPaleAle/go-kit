@@ -77,10 +77,12 @@ func (e ApiError) Error() string {
 // Is implements error comparison by checking if the target error is an ApiError with the same error code.
 // This allows using errors.Is() to compare API errors based on their code rather than pointer equality.
 func (e ApiError) Is(target error) bool {
-	targetApiError, ok := target.(ApiError)
-	if !ok {
+	switch t := target.(type) {
+	case ApiError:
+		return t.Code == e.Code
+	case *ApiError:
+		return t != nil && t.Code == e.Code
+	default:
 		return false
 	}
-
-	return targetApiError.Code == e.Code
 }

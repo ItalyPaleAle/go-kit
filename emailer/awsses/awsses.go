@@ -48,6 +48,11 @@ func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
 
+	err := internal.ValidateEmailAddress("from address", fromAddress)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
+
 	// Persist the static credentials and endpoint so SendEmail can stay allocation-light
 	a.accessKeyID = accessKeyID
 	a.secretAccessKey = secretAccessKey
@@ -66,6 +71,11 @@ func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 
 // SendEmail posts a simple SES v2 payload and signs the request with AWS Signature Version 4
 func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
+	err := internal.ValidateEmailAddress("recipient address", toEmail)
+	if err != nil {
+		return err
+	}
+
 	// Build the smallest SES v2 payload that matches the Emailer interface
 	payloadBody := sendEmailRequest{
 		Content: sendEmailContent{
@@ -134,12 +144,12 @@ func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, m
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}()
 
 	// Bubble up the SES response body because it usually contains the rejection reason
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return fmt.Errorf("failed to send email (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 

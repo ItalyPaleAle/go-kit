@@ -3,6 +3,7 @@ package awsses
 import (
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -89,4 +90,123 @@ func TestSignRequestIncludesSessionToken(t *testing.T) {
 	// The token must be present both as a header and in the signed header list
 	assert.Equal(t, "session-token", req.Header.Get("X-Amz-Security-Token"))
 	assert.Contains(t, req.Header.Get("Authorization"), "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token")
+}
+
+func TestAWSURLEscape(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		// Unreserved characters pass through unchanged
+		{input: "abcABC123", want: "abcABC123"},
+		{input: "-._~", want: "-._~"},
+		// Common characters that must be percent-encoded
+		{input: " ", want: "%20"},
+		{input: "+", want: "%2B"},
+		{input: "/", want: "%2F"},
+		{input: "=", want: "%3D"},
+		{input: "&", want: "%26"},
+		{input: "@", want: "%40"},
+		{input: ":", want: "%3A"},
+		// Hex digits must be uppercase
+		{input: "\x0a", want: "%0A"},
+		{input: "\xff", want: "%FF"},
+		// Multi-byte UTF-8: each byte is escaped independently
+		{input: "€", want: "%E2%82%AC"},
+		// Mixed
+		{input: "foo bar/baz=qux", want: "foo%20bar%2Fbaz%3Dqux"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := awsURLEscape(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCanonicalQueryString(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "empty query string",
+			query: "",
+			want:  "",
+		},
+		{
+			name:  "single param",
+			query: "Action=SendEmail",
+			want:  "Action=SendEmail",
+		},
+		{
+			name:  "params sorted by key",
+			query: "Zoo=last&Action=first",
+			want:  "Action=first&Zoo=last",
+		},
+		{
+			name:  "empty value",
+			query: "key=",
+			want:  "key=",
+		},
+		{
+			name:  "repeated key values sorted",
+			query: "k=b&k=a&k=c",
+			want:  "k=a&k=b&k=c",
+		},
+		{
+			name:  "values are AWS-escaped",
+			query: "q=hello world",
+			want:  "q=hello%20world",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := url.Parse("https://example.com/?" + tt.query)
+			require.NoError(t, err)
+			got := canonicalQueryString(u)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCanonicalURI(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "empty path becomes slash",
+			path: "",
+			want: "/",
+		},
+		{
+			name: "root slash",
+			path: "/",
+			want: "/",
+		},
+		{
+			name: "normal path",
+			path: "/v2/email/outbound-emails",
+			want: "/v2/email/outbound-emails",
+		},
+		{
+			name: "path with percent-encoded segment",
+			path: "/v2/email/my%20folder",
+			want: "/v2/email/my%20folder",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := url.Parse("https://example.com" + tt.path)
+			require.NoError(t, err)
+			got := canonicalURI(u)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

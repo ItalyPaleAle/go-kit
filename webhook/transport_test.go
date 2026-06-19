@@ -29,7 +29,8 @@ func TestTransportRefusesInternalIPs(t *testing.T) {
 
 			conn, err := transport.DialContext(ctx, "tcp", tc.address)
 			if conn != nil {
-				conn.Close()
+				err = conn.Close()
+				require.Error(t, err)
 			}
 
 			require.Error(t, err)

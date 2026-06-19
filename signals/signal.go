@@ -1,6 +1,6 @@
 // Package signals provides a function that returns a context that gets canceled when the process receives a SIGINT or SIGTERM, allowing for graceful shutdown.
 // A second signal forces immediate termination via os.Exit(1).
-// The signal handler can only be set up once per process; calling [SignalContext] twice will panic.
+// The signal handler can only be set up once per process - calling [SignalContext] twice will panic.
 package signals
 
 import (

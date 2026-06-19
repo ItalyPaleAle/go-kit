@@ -91,6 +91,10 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 	if err != nil {
 		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
 	}
+	err = internal.ValidateEmailAddress("from address", fromAddress)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
 
 	s.host = host
 	s.port = port
@@ -146,10 +150,12 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 	// Hand the connection to the SMTP client so the rest of the session can use standard commands
 	client, err := stdsmtp.NewClient(conn, s.host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("failed to create SMTP client: %w", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close()
+	}()
 
 	// Upgrade the connection before auth when the selected mode requires transport security
 	err = s.configureTLS(client)
@@ -180,7 +186,7 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 	}
 	_, err = writer.Write(payload)
 	if err != nil {
-		writer.Close()
+		_ = writer.Close()
 		return fmt.Errorf("failed to write SMTP message: %w", err)
 	}
 	err = writer.Close()
@@ -201,6 +207,10 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 func (s SMTPEmailer) buildMessage(toEmail string, subject string, message internal.SendEmailMessage) ([]byte, error) {
 	// Reject CR/LF in the caller-supplied header values so a crafted recipient or subject cannot inject extra headers or a second body
 	err := validateHeaderValue("recipient address", toEmail)
+	if err != nil {
+		return nil, err
+	}
+	err = internal.ValidateEmailAddress("recipient address", toEmail)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +367,7 @@ func writeMultipartPart(writer *multipart.Writer, contentType string, value stri
 	qpWriter := quotedprintable.NewWriter(part)
 	_, err = qpWriter.Write([]byte(value))
 	if err != nil {
-		qpWriter.Close()
+		_ = qpWriter.Close()
 		return err
 	}
 
@@ -371,7 +381,7 @@ func encodeBodyPart(value string) ([]byte, error) {
 	qpWriter := quotedprintable.NewWriter(&body)
 	_, err := qpWriter.Write([]byte(value))
 	if err != nil {
-		qpWriter.Close()
+		_ = qpWriter.Close()
 		return nil, err
 	}
 	err = qpWriter.Close()

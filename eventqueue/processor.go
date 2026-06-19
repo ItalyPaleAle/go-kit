@@ -21,7 +21,7 @@ type Options[K comparable, T Queueable[K]] struct {
 	Clock     kclock.Clock
 }
 
-// Processor manages the queue of items and processes them at the correct time.
+// Processor manages the queue of items and processes them at the correct time
 type Processor[K comparable, T Queueable[K]] struct {
 	executeFn          func(r T)
 	queue              queue[K, T]
@@ -35,7 +35,8 @@ type Processor[K comparable, T Queueable[K]] struct {
 }
 
 // NewProcessor returns a new Processor object.
-// executeFn is the callback invoked when the item is to be executed; this will be invoked in a background goroutine.
+// executeFn is the callback invoked when the item is to be executed
+// This will be invoked in a background goroutine
 func NewProcessor[K comparable, T Queueable[K]](opts Options[K, T]) *Processor[K, T] {
 	cl := opts.Clock
 	if cl == nil {

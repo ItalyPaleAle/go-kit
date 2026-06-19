@@ -112,7 +112,9 @@ func TestSendEmail(t *testing.T) {
 	require.NoError(t, err)
 
 	req := <-reqCh
-	defer req.Body.Close()
+	defer func() {
+		_ = req.Body.Close()
+	}()
 
 	// The request must always target the production SendGrid endpoint
 	assert.Equal(t, http.MethodPost, req.Method)
@@ -176,7 +178,9 @@ func TestSendEmailOmitsHTMLWhenEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	req := <-reqCh
-	defer req.Body.Close()
+	t.Cleanup(func() {
+		_ = req.Body.Close()
+	})
 	body, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 

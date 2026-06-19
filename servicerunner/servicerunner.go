@@ -6,6 +6,7 @@ package servicerunner
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // Service is a background service
@@ -31,6 +32,15 @@ func (r *ServiceRunner) Run(parentCtx context.Context) error {
 	errCh := make(chan error)
 	for _, service := range r.services {
 		go func(service Service) {
+			// Convert any panic into an error so the drain loop always receives exactly one value per goroutine
+			defer func() {
+				p := recover()
+				if p != nil {
+					cancel()
+					errCh <- fmt.Errorf("service panicked: %v", p)
+				}
+			}()
+
 			// Run the service
 			rErr := service(ctx)
 

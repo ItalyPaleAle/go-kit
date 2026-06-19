@@ -101,7 +101,8 @@ func TestInitRejectsHeaderInjection(t *testing.T) {
 }
 
 func TestSendEmailRejectsHeaderInjection(t *testing.T) {
-	// Configure a valid emailer; buildMessage validates before any network dial, so no server is needed
+	// Configure a valid emailer
+	// BuildMessage validates before any network dial, so no server is needed
 	connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com&tls=none")
 	require.NoError(t, err)
 
@@ -193,7 +194,7 @@ func newSMTPTestServer(t *testing.T) *smtpTestServer {
 	go server.serve()
 
 	t.Cleanup(func() {
-		listener.Close()
+		_ = listener.Close()
 	})
 
 	return server
@@ -234,7 +235,9 @@ func (s *smtpTestServer) serve() {
 
 func (s *smtpTestServer) handleConn(conn net.Conn) (smtpTestSession, error) {
 	// Close the connection on every exit path so the test server never leaks sockets
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
