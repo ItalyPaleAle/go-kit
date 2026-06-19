@@ -116,7 +116,12 @@ func (m *Mux) applyPrefix(pattern string) string {
 			hostPart = rest[:slashIdx]
 			path = rest[slashIdx:]
 		} else {
-			// No slash anywhere in rest: treat the entire remainder as a path missing its leading slash
+			// A token that contains a dot but no slash looks like a hostname missing its path component
+			// (e.g. "example.com" via a group prefix) — prepending a slash would silently register a
+			// path match instead of a host match, masking the panic http.ServeMux raises for these patterns
+			if strings.Contains(rest, ".") {
+				panic("httpserver: pattern \"" + pattern + "\" has a host component with no path slash; use \"" + rest + "/\" to match the host root")
+			}
 			path = "/" + rest
 		}
 	}
