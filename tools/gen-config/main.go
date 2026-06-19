@@ -102,11 +102,11 @@ func generateFromStruct(configStruct string, yamlDest string, mdDest string, doc
 			return err
 		}
 		defer readmeFile.Close()
-		readmeFile.Write(readme[:begin])
-		readmeFile.Write([]byte{'\n'})
-		io.Copy(readmeFile, outBufMD)
-		readmeFile.Write([]byte{'\n'})
-		readmeFile.Write(readme[end:])
+		_, _ = readmeFile.Write(readme[:begin])
+		_, _ = readmeFile.Write([]byte{'\n'})
+		_, _ = io.Copy(readmeFile, outBufMD)
+		_, _ = readmeFile.Write([]byte{'\n'})
+		_, _ = readmeFile.Write(readme[end:])
 	}
 
 	return nil

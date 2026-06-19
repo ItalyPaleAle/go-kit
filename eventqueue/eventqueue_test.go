@@ -49,7 +49,7 @@ func ExampleProcessor() {
 	_ = processor.Enqueue(&queueableItem{Name: "item3", ExecutionTime: time.Now().Add(100 * time.Millisecond)})
 
 	// Using Dequeue allows removing an item from the queue
-	processor.Dequeue("item4")
+	_ = processor.Dequeue("item4")
 
 	for range 3 {
 		fmt.Println(<-executed)

@@ -143,7 +143,7 @@ func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, m
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}()
 
 	// Bubble up the SES response body because it usually contains the rejection reason

@@ -154,7 +154,7 @@ func awsURLEscape(value string) string {
 	// Go's standard query escaping does not match AWS's byte-for-byte uppercase hex rules
 	var out strings.Builder
 	out.Grow(int(float64(len(value)) * 1.2))
-	for i := 0; i < len(value); i++ {
+	for i := range len(value) {
 		b := value[i]
 		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '-' || b == '.' || b == '_' || b == '~' {
 			out.WriteByte(b)

@@ -150,10 +150,12 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 	// Hand the connection to the SMTP client so the rest of the session can use standard commands
 	client, err := stdsmtp.NewClient(conn, s.host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("failed to create SMTP client: %w", err)
 	}
-	defer client.Close()
+	defer func() {
+		_ = client.Close()
+	}()
 
 	// Upgrade the connection before auth when the selected mode requires transport security
 	err = s.configureTLS(client)
@@ -184,7 +186,7 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 	}
 	_, err = writer.Write(payload)
 	if err != nil {
-		writer.Close()
+		_ = writer.Close()
 		return fmt.Errorf("failed to write SMTP message: %w", err)
 	}
 	err = writer.Close()
@@ -365,7 +367,7 @@ func writeMultipartPart(writer *multipart.Writer, contentType string, value stri
 	qpWriter := quotedprintable.NewWriter(part)
 	_, err = qpWriter.Write([]byte(value))
 	if err != nil {
-		qpWriter.Close()
+		_ = qpWriter.Close()
 		return err
 	}
 
@@ -379,7 +381,7 @@ func encodeBodyPart(value string) ([]byte, error) {
 	qpWriter := quotedprintable.NewWriter(&body)
 	_, err := qpWriter.Write([]byte(value))
 	if err != nil {
-		qpWriter.Close()
+		_ = qpWriter.Close()
 		return nil, err
 	}
 	err = qpWriter.Close()

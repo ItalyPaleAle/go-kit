@@ -96,7 +96,7 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode >= 400 {

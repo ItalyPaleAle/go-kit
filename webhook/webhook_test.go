@@ -164,7 +164,9 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.NoError(t, err)
 
 		req := <-reqCh
-		defer req.Body.Close()
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, "http://198.51.100.10/endpoint", req.URL.String())
 		require.Equal(t, "text/plain", req.Header.Get("Content-Type"))
@@ -191,7 +193,10 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.NoError(t, err)
 
 		req := <-reqCh
-		defer req.Body.Close()
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
+
 		assert.Empty(t, req.Header.Get("Authorization"))
 		assert.Equal(t, "Bearer secret-token", req.Header.Get("X-Webhook-Key"))
 		assertBodyEqual(t, req.Body, "plain message body")
@@ -215,7 +220,9 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.NoError(t, err)
 
 		req := <-reqCh
-		defer req.Body.Close()
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, "application/json", req.Header.Get("Content-Type"))
 		require.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
@@ -241,7 +248,9 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.NoError(t, err)
 
 		req := <-reqCh
-		defer req.Body.Close()
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
 		assert.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
 		assert.Empty(t, req.Header.Get("X-Webhook-Key"))
 		assertBodyEqual(t, req.Body, `{"text":"hello slack"}`+"\n")
@@ -252,7 +261,9 @@ func TestWebhookRequestFormatting(t *testing.T) {
 
 		req, err := wh.prepareSlackRequest(t.Context(), wh.webhookURL, testMessageProvider{message: "discord payload"})
 		require.NoError(t, err)
-		defer req.Body.Close()
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
 		require.Equal(t, "application/json", req.Header.Get("Content-Type"))
 		assertBodyEqual(t, req.Body, `{"text":"discord payload"}`+"\n")
 	})
@@ -276,7 +287,9 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.NoError(t, err)
 
 		req := <-reqCh
-		defer req.Body.Close()
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
 		assert.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
 		assert.Empty(t, req.Header.Get("X-Webhook-Key"))
 		assertBodyEqual(t, req.Body, `{"text":"hello discord"}`+"\n")
@@ -319,7 +332,8 @@ func TestWebhookRequestErrors(t *testing.T) {
 		require.ErrorContains(t, err, "invalid response status code: 400")
 
 		req := <-reqCh
-		req.Body.Close()
+		err = req.Body.Close()
+		require.NoError(t, err)
 	})
 }
 
@@ -354,7 +368,8 @@ func TestWebhook(t *testing.T) {
 		require.ErrorContains(t, err, "invalid response status code: 403")
 
 		r := <-reqCh
-		r.Body.Close()
+		err = r.Body.Close()
+		require.NoError(t, err)
 	})
 
 	t.Run("retry on 429 status codes without Retry-After header", func(t *testing.T) {
@@ -580,7 +595,7 @@ func assertRetries(
 		for i := range expectRequests {
 			select {
 			case r := <-reqCh:
-				r.Body.Close()
+				_ = r.Body.Close()
 			case <-ctx.Done():
 				doneCh <- ctx.Err()
 				return

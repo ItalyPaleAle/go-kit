@@ -199,7 +199,7 @@ retryLoop:
 
 		// Drain and close the body before cancelling the context so the connection can be reused
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4<<10))
-		res.Body.Close()
+		_ = res.Body.Close()
 		reqCancel()
 
 		// Handle retries if we have more attempts
