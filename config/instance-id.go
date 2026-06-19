@@ -44,7 +44,6 @@ func parseOtelResourceAttributesEnvVar(val string) map[string]string {
 		return make(map[string]string, 0)
 	}
 
-	var err error
 	pairs := strings.Split(val, ",")
 	vals := make(map[string]string, len(pairs))
 	for _, pair := range pairs {
@@ -53,9 +52,11 @@ func parseOtelResourceAttributesEnvVar(val string) map[string]string {
 			continue
 		}
 		k = strings.TrimSpace(k)
-		v, err = url.PathUnescape(strings.TrimSpace(v))
-		if err != nil {
-			continue
+		v = strings.TrimSpace(v)
+		// Mirror the OTel SDK: keep the raw value when unescaping fails
+		unescaped, err := url.PathUnescape(v)
+		if err == nil {
+			v = unescaped
 		}
 		vals[k] = v
 	}

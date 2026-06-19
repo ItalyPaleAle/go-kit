@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -105,22 +106,49 @@ func TestApiError_Is(t *testing.T) {
 		target error
 		want   bool
 	}{
+		// *ApiError on both sides — the real-world case since NewApiError returns a pointer
 		{
-			name:   "matches same error code",
+			name:   "pointer: matches same error code",
+			err:    err1,
+			target: err2,
+			want:   true,
+		},
+		{
+			name:   "pointer: matches itself",
+			err:    err1,
+			target: err1,
+			want:   true,
+		},
+		{
+			name:   "pointer: does not match different error code",
+			err:    err1,
+			target: err3,
+			want:   false,
+		},
+		// Value target (ApiError, not *ApiError)
+		{
+			name:   "value target: matches same error code",
 			err:    err1,
 			target: *err2,
 			want:   true,
 		},
 		{
-			name:   "matches itself",
+			name:   "value target: does not match different error code",
 			err:    err1,
-			target: *err1,
+			target: *err3,
+			want:   false,
+		},
+		// Wrapped pointer — errors.Is must unwrap and still match
+		{
+			name:   "wrapped pointer: matches same error code",
+			err:    fmt.Errorf("wrapped: %w", err1),
+			target: err2,
 			want:   true,
 		},
 		{
-			name:   "does not match different error code",
-			err:    err1,
-			target: *err3,
+			name:   "wrapped pointer: does not match different error code",
+			err:    fmt.Errorf("wrapped: %w", err1),
+			target: err3,
 			want:   false,
 		},
 		{
@@ -139,13 +167,7 @@ func TestApiError_Is(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var apiErr ApiError
-			if !errors.As(tt.err, &apiErr) {
-				var apiErrPtr *ApiError
-				require.ErrorAs(t, tt.err, &apiErrPtr)
-				apiErr = *apiErrPtr
-			}
-			assert.Equal(t, tt.want, apiErr.Is(tt.target))
+			assert.Equal(t, tt.want, errors.Is(tt.err, tt.target))
 		})
 	}
 }
