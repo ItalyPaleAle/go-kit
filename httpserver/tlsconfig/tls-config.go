@@ -86,17 +86,19 @@ type tlsCertProvider struct {
 // Creates a new tlsCertProvider object
 // If we cannot find a TLS certificates, the returned object will be nil
 func newTLSCertProvider(path string) (*tlsCertProvider, error) {
-	var exists bool
-
 	// Check if the certificate and key exist
 	cert := filepath.Join(path, tlsCertFile)
-	if exists, _ = utils.FileExists(cert); !exists {
-		//nolint:nilnil
+	exists, err := utils.FileExists(cert)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat TLS certificate file '%s': %w", tlsCertFile, err)
+	} else if !exists {
 		return nil, nil
 	}
 	key := filepath.Join(path, tlsKeyFile)
-	if exists, _ = utils.FileExists(key); !exists {
-		//nolint:nilnil
+	exists, err = utils.FileExists(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat TLS certificate key '%s': %w", tlsCertFile, err)
+	} else if !exists {
 		return nil, nil
 	}
 

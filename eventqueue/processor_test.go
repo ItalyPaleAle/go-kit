@@ -121,7 +121,7 @@ func TestProcessor(t *testing.T) {
 	})
 
 	t.Run("dequeue item", func(t *testing.T) {
-		assert.Equal(t, 0, processor.queue.Len())
+		assert.Equal(t, 0, processor.Count())
 		require.False(t, clock.HasWaiters())
 
 		// Enqueue 5 items
@@ -130,14 +130,14 @@ func TestProcessor(t *testing.T) {
 				newTestItem(i, clock.Now().Add(time.Second*time.Duration(i))),
 			)
 		}
-		assert.Equal(t, 5, processor.queue.Len())
+		assert.Equal(t, 5, processor.Count())
 
 		// Dequeue items 2 and 4
 		// Note that this is a string because it's the key
 		processor.Dequeue("2")
 		processor.Dequeue("4")
 
-		assert.Equal(t, 3, processor.queue.Len())
+		assert.Equal(t, 3, processor.Count())
 
 		// Advance tickers and assert messages are coming in order
 		for i := 1; i <= 5; i++ {
@@ -350,7 +350,7 @@ func TestClose(t *testing.T) {
 
 	processor.Enqueue(newTestItem(1, clock.Now().Add(time.Second)))
 	processor.Enqueue(newTestItem(2, clock.Now().Add(time.Second*2)))
-	assert.Equal(t, 2, processor.queue.Len())
+	assert.Equal(t, 2, processor.Count())
 
 	assert.Eventually(t, clock.HasWaiters, time.Second, 10*time.Millisecond)
 
@@ -367,7 +367,7 @@ func TestClose(t *testing.T) {
 		t.Fatal("should receive item")
 	}
 
-	assert.Equal(t, 1, processor.queue.Len())
+	assert.Equal(t, 1, processor.Count())
 
 	closeCh := make(chan error)
 	go func() {

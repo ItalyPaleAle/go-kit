@@ -20,6 +20,14 @@ func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
 		return nil, fmt.Errorf("failed to create watcher: %w", err)
 	}
 
+	// Add the folder to the watcher
+	err = watcher.Add(folder)
+	if err != nil {
+		// Close the watcher on failure so its OS handle is not leaked
+		_ = watcher.Close()
+		return nil, fmt.Errorf("failed to add watched folder: %w", err)
+	}
+
 	msgChan := make(chan struct{}, 1)
 	batcher := make(chan struct{}, 1)
 	var wg sync.WaitGroup
@@ -79,11 +87,6 @@ func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
 			}
 		}
 	}()
-
-	err = watcher.Add(folder)
-	if err != nil {
-		return nil, fmt.Errorf("failed to add watched folder: %w", err)
-	}
 
 	return msgChan, nil
 }

@@ -122,6 +122,20 @@ func TestIsPrivateIP(t *testing.T) {
 		{"public IPv6 just above documentation", "2001:db9::1", false},
 		{"public IPv6 just below fc00", "fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false},
 		{"public IPv6 just above fe80 range", "fec0::1", false},
+
+		// --- IPv4-embedding IPv6 forms must follow the embedded v4 classification (SSRF hardening) ---
+		// NAT64 well-known prefix 64:ff9b::/96
+		{"NAT64 metadata 169.254.169.254", "64:ff9b::a9fe:a9fe", true},
+		{"NAT64 loopback 127.0.0.1", "64:ff9b::7f00:1", true},
+		{"NAT64 private 10.0.0.1", "64:ff9b::a00:1", true},
+		{"NAT64 public 8.8.8.8 stays routable", "64:ff9b::808:808", false},
+		// 6to4 prefix 2002::/16
+		{"6to4 metadata 169.254.169.254", "2002:a9fe:a9fe::", true},
+		{"6to4 private 10.0.0.1", "2002:a00:1::", true},
+		{"6to4 public 8.8.8.8 stays routable", "2002:808:808::", false},
+		// Deprecated IPv4-compatible form ::a.b.c.d
+		{"v4-compatible metadata 169.254.169.254", "::169.254.169.254", true},
+		{"v4-compatible private 10.0.0.1", "::10.0.0.1", true},
 	}
 
 	for _, tt := range tests {

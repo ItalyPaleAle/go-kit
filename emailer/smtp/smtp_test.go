@@ -122,6 +122,50 @@ func TestSendEmailRejectsHeaderInjection(t *testing.T) {
 	})
 }
 
+func TestSendEmailHonorsContextDeadline(t *testing.T) {
+	// A server that accepts the connection but never sends the SMTP greeting, so the client blocks reading it
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	release := make(chan struct{})
+	defer close(release)
+	go func() {
+		conn, aerr := listener.Accept()
+		if aerr != nil {
+			return
+		}
+		// Hold the connection open and silent until the test releases it
+		<-release
+		_ = conn.Close()
+	}()
+
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+	connString, err := url.Parse(fmt.Sprintf("smtp://%s:%s?fromAddress=sender@example.com&tls=none", host, port))
+	require.NoError(t, err)
+
+	var emailer SMTPEmailer
+	err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+	require.NoError(t, err)
+
+	// A short deadline must abort the silent session promptly instead of blocking forever
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- emailer.SendEmail(ctx, "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
+	}()
+
+	select {
+	case sendErr := <-done:
+		require.Error(t, sendErr, "SendEmail should fail once the context deadline elapses")
+	case <-time.After(5 * time.Second):
+		t.Fatal("SendEmail ignored the context deadline and hung")
+	}
+}
+
 type smtpTestSession struct {
 	authCommand string
 	mailFrom    string

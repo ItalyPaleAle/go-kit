@@ -98,6 +98,13 @@ func (p *Processor[K, T]) Dequeue(key K) error {
 	return nil
 }
 
+// Count returns the number of items currently in the queue.
+func (p *Processor[K, T]) Count() int {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	return p.queue.Len()
+}
+
 // Close stops the processor.
 // This method blocks until the processor loop returns.
 func (p *Processor[K, T]) Close() error {

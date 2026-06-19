@@ -132,6 +132,17 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)
 	}
 
+	// net/smtp performs blocking socket reads with no awareness of ctx, so honor the caller's context for the rest of the conversation
+	// A deadline (when the caller set one) bounds an unresponsive server, and closing the connection on cancellation unblocks any in-flight read
+	deadline, ok := ctx.Deadline()
+	if ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	stopWatch := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
+	defer stopWatch()
+
 	// Hand the connection to the SMTP client so the rest of the session can use standard commands
 	client, err := stdsmtp.NewClient(conn, s.host)
 	if err != nil {

@@ -65,8 +65,10 @@ func mustParseCIDRs(cidrs []string) []*net.IPNet {
 // Addresses in the CGNAT range (100.64.0.0/10) and Tailscale ULA subset (fd7a:115c:a1e0::/48) are treated as routable, because they are used as legitimate cross-host address space by overlays like Tailscale
 // A nil or zero-length ip yields false, matching the behavior of net.IPNet.Contains
 func IsPrivateIP(ip net.IP) bool {
-	// Normalize IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) to their IPv4 form so the v4 block list applies uniformly
-	v4 := ip.To4()
+	// Normalize any IPv4 address embedded in an IPv6 address back to its IPv4 form so the v4 block list applies uniformly
+	// Covers IPv4-mapped (::ffff:a.b.c.d), NAT64 (64:ff9b::/96), 6to4 (2002::/16), and the deprecated IPv4-compatible (::a.b.c.d) forms
+	// Without this an attacker could smuggle a blocked IPv4 (loopback, link-local metadata, RFC1918) past the check inside an IPv6 wrapper
+	v4 := to4(ip)
 	if v4 != nil {
 		ip = v4
 	}
@@ -83,4 +85,47 @@ func IsPrivateIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// to4 returns the IPv4 address embedded in ip, or nil if ip does not embed one
+// It recognizes plain IPv4, IPv4-mapped IPv6 (::ffff:a.b.c.d), NAT64 (64:ff9b::/96), 6to4 (2002::/16), and the deprecated IPv4-compatible form (::a.b.c.d)
+func to4(ip net.IP) net.IP {
+	// To4 already handles plain IPv4 and the IPv4-mapped form
+	v4 := ip.To4()
+	if v4 != nil {
+		return v4
+	}
+
+	// Only a full 16-byte IPv6 address can embed an IPv4 in the forms below
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return nil
+	}
+
+	switch {
+	// NAT64 well-known prefix 64:ff9b::/96 (RFC 6052) carries the IPv4 in the low 32 bits
+	case ip16[0] == 0x00 && ip16[1] == 0x64 && ip16[2] == 0xff && ip16[3] == 0x9b && isZero(ip16[4:12]):
+		return net.IP{ip16[12], ip16[13], ip16[14], ip16[15]}
+
+	// 6to4 prefix 2002::/16 (RFC 3056) carries the IPv4 in bytes 2-5
+	case ip16[0] == 0x20 && ip16[1] == 0x02:
+		return net.IP{ip16[2], ip16[3], ip16[4], ip16[5]}
+
+	// Deprecated IPv4-compatible form ::a.b.c.d (::/96, RFC 4291) carries the IPv4 in the low 32 bits
+	// This also matches :: and ::1, whose extracted v4 (0.0.0.0 / 0.0.0.1) still lands in the blocked 0.0.0.0/8 range
+	case isZero(ip16[0:12]):
+		return net.IP{ip16[12], ip16[13], ip16[14], ip16[15]}
+	}
+
+	return nil
+}
+
+// isZero reports whether every byte in b is zero
+func isZero(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return false
+		}
+	}
+	return true
 }
