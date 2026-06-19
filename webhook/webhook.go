@@ -29,6 +29,7 @@ const (
 const (
 	webhookTimeout       = 20 * time.Second
 	retryIntervalSeconds = 20
+	maxRetryAfterSeconds = 60
 )
 
 // Webhook client interface
@@ -206,8 +207,10 @@ retryLoop:
 			// Handle throttling on 429 responses and on 5xx errors
 			if res.StatusCode == http.StatusTooManyRequests {
 				retryAfter, _ := strconv.Atoi(res.Header.Get("Retry-After"))
-				if retryAfter < 1 || retryAfter > retryIntervalSeconds {
+				if retryAfter < 1 {
 					retryAfter = retryIntervalSeconds
+				} else if retryAfter > maxRetryAfterSeconds {
+					retryAfter = maxRetryAfterSeconds
 				}
 				w.log.WarnContext(ctx,
 					"Webhook throttled; will retry after delay",

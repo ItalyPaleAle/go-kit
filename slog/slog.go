@@ -21,7 +21,9 @@ func FatalError(log *slog.Logger, message string, err error) {
 	var pcs [1]uintptr
 	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
 	r := slog.NewRecord(time.Now(), slog.LevelError, message, pcs[0])
-	r.AddAttrs(slog.String("error", err.Error()))
+	if err != nil {
+		r.AddAttrs(slog.String("error", err.Error()))
+	}
 	_ = log.Handler().Handle(context.Background(), r)
 
 	os.Exit(1)

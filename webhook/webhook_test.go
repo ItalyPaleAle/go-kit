@@ -517,7 +517,7 @@ func TestWebhook(t *testing.T) {
 		require.NoError(t, <-doneCh)
 	})
 
-	t.Run("retry after values above the maximum are clamped", func(t *testing.T) {
+	t.Run("retry after values above the cap are clamped to the cap", func(t *testing.T) {
 		reqCh := make(chan *http.Request)
 		rtt.SetReqCh(reqCh)
 		resCh := make(chan *http.Response, 1)
@@ -532,11 +532,28 @@ func TestWebhook(t *testing.T) {
 		wh.httpClient.Transport = rtt
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 2, retryIntervalSeconds*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 2, maxRetryAfterSeconds*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookData())
 		require.NoError(t, err)
 		require.NoError(t, <-doneCh)
+	})
+
+	t.Run("redirects to private IPs are not followed", func(t *testing.T) {
+		requestURLs := make([]string, 0, 2)
+		wh.httpClient.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			requestURLs = append(requestURLs, r.URL.String())
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"http://192.168.1.1/internal"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		})
+
+		err := wh.SendWebhook(t.Context(), testMessageProvider{message: "test"})
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid response status code: 302")
+		assert.Equal(t, []string{"http://198.51.100.10/endpoint"}, requestURLs)
 	})
 }
 
