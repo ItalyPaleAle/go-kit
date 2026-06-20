@@ -117,10 +117,9 @@ func (c *Cache[K, V]) Delete(key K) {
 func (c *Cache[K, V]) Cleanup() {
 	now := c.clock.Now()
 
-	// Look for all expired keys and then remove them in bulk
-	// This is more efficient than removing keys one-by-one
-	// However, this could lead to a race condition where keys that are updated after ForEach ends are deleted nevertheless.
-	// This is considered acceptable in this case as this is just a cache.
+	// Snapshot expired keys via ForEach, then re-check each one before deleting
+	// A concurrent Set may refresh a key between the snapshot and the delete; re-checking
+	// at delete time avoids evicting an entry that was renewed after the snapshot
 	keys := make([]K, 0)
 	c.m.ForEach(func(k K, v cacheEntry[V]) bool {
 		if !v.exp.After(now) {
@@ -129,7 +128,12 @@ func (c *Cache[K, V]) Cleanup() {
 		return true
 	})
 
-	c.m.Del(keys...)
+	for _, k := range keys {
+		entry, ok := c.m.Get(k)
+		if ok && !entry.exp.After(now) {
+			c.m.Del(k)
+		}
+	}
 }
 
 // Reset removes all entries from the cache.

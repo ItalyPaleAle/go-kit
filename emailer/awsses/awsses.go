@@ -119,11 +119,12 @@ func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, m
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Use the injected clock in tests while remaining safe for manually constructed instances
-	requestTime := time.Now().UTC()
-	if a.now != nil {
-		requestTime = a.now().UTC()
+	// Use the injected clock in tests while defaulting to time.Now for manually constructed instances
+	nowFn := a.now
+	if nowFn == nil {
+		nowFn = time.Now
 	}
+	requestTime := nowFn()
 
 	// Sign the final request bytes so SES can authenticate the caller without the AWS SDK
 	err = a.signRequest(req, payload, requestTime)

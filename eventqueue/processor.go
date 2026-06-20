@@ -62,6 +62,12 @@ func (p *Processor[K, T]) Enqueue(rs ...T) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	// Re-check under the lock: Close may have run between the atomic load above and here,
+	// leaving no active processor loop to drain the items we are about to insert
+	if p.stopped.Load() {
+		return ErrProcessorStopped
+	}
+
 	for _, r := range rs {
 		p.enqueue(r)
 	}
@@ -201,7 +207,10 @@ func (p *Processor[K, T]) processLoop() {
 
 		// If we get a reset signal, restart the loop
 		case <-p.resetCh:
-			// Restart the loop
+			// Stop the armed timer before restarting to avoid polluting the clock's waiter list
+			if !t.Stop() {
+				<-t.C()
+			}
 			continue
 
 		// If we receive a stop signal, exit
