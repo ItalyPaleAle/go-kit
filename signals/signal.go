@@ -30,13 +30,20 @@ func SignalContext(parentCtx context.Context) context.Context {
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		slog.Info("Received interrupt signal. Shutting down…")
-		cancel()
-
-		<-sigCh
-		slog.Warn("Received a second interrupt signal. Forcing an immediate shutdown.")
-		os.Exit(1)
+		defer signal.Stop(sigCh)
+		select {
+		case <-sigCh:
+			slog.Info("Received interrupt signal. Shutting down…")
+			cancel()
+		case <-parentCtx.Done():
+			return
+		}
+		select {
+		case <-sigCh:
+			slog.Warn("Received a second interrupt signal. Forcing an immediate shutdown.")
+			os.Exit(1)
+		case <-parentCtx.Done():
+		}
 	}()
 
 	return ctx
