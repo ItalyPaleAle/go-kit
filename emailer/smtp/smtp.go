@@ -292,7 +292,9 @@ func (s SMTPEmailer) configureTLS(client *stdsmtp.Client) error {
 		if s.tlsMode == smtpTLSStartTLS {
 			return errors.New("SMTP server does not support STARTTLS")
 		}
-		return nil
+
+		// auto mode fails closed: silently downgrading to plaintext would send credentials unencrypted Callers that intentionally want no TLS must set tls=none explicitly
+		return errors.New("SMTP server does not support STARTTLS - use tls=none to allow unencrypted connections")
 	}
 
 	return client.StartTLS(s.tlsConfig)

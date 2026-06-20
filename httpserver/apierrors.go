@@ -30,7 +30,7 @@ func NewApiError(code string, httpStatus int, message string) *ApiError {
 // It sets the Content-Type header to application/json, writes the appropriate HTTP
 // status code, and serializes the error as JSON in the response body.
 func (e ApiError) WriteResponse(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add(HeaderContentType, ContentTypeJson)
+	w.Header().Set(HeaderContentType, ContentTypeJson)
 	w.WriteHeader(e.httpStatus)
 
 	RespondWithJSON(w, r, e)

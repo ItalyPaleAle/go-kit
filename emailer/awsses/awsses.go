@@ -120,10 +120,11 @@ func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, m
 	}
 
 	// Use the injected clock in tests while remaining safe for manually constructed instances
-	requestTime := time.Now().UTC()
+	requestTime := time.Now()
 	if a.now != nil {
-		requestTime = a.now().UTC()
+		requestTime = a.now()
 	}
+	requestTime = requestTime.UTC()
 
 	// Sign the final request bytes so SES can authenticate the caller without the AWS SDK
 	err = a.signRequest(req, payload, requestTime)

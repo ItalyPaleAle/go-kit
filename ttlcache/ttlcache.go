@@ -121,6 +121,7 @@ func (c *Cache[K, V]) Cleanup() {
 	// This is more efficient than removing keys one-by-one
 	// However, this could lead to a race condition where keys that are updated after ForEach ends are deleted nevertheless.
 	// This is considered acceptable in this case as this is just a cache.
+	// We could check each key before deleting it, however it is more efficient to make a single call to Del to delete all keys in bulk, so we just accept the small tradeoff
 	keys := make([]K, 0)
 	c.m.ForEach(func(k K, v cacheEntry[V]) bool {
 		if !v.exp.After(now) {

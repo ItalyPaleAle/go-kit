@@ -62,6 +62,11 @@ func (p *Processor[K, T]) Enqueue(rs ...T) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
+	// Re-check under the lock
+	if p.stopped.Load() {
+		return ErrProcessorStopped
+	}
+
 	for _, r := range rs {
 		p.enqueue(r)
 	}
@@ -201,6 +206,10 @@ func (p *Processor[K, T]) processLoop() {
 
 		// If we get a reset signal, restart the loop
 		case <-p.resetCh:
+			// Stop the timer
+			if !t.Stop() {
+				<-t.C()
+			}
 			// Restart the loop
 			continue
 

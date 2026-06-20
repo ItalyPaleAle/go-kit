@@ -328,3 +328,20 @@ func readSMTPData(reader *bufio.Reader) (string, error) {
 		}
 	}
 }
+
+func TestSendEmailAutoTLSFailsIfStartTLSNotSupported(t *testing.T) {
+	// The test server's EHLO response does not include STARTTLS tls=auto must refuse to send rather than silently downgrade to plaintext
+	server := newSMTPTestServer(t)
+	host, port, err := net.SplitHostPort(server.address())
+	require.NoError(t, err)
+
+	connString, err := url.Parse(fmt.Sprintf("smtp://mailer:secret@%s:%s?fromAddress=sender@example.com&tls=auto", host, port))
+	require.NoError(t, err)
+
+	var emailer SMTPEmailer
+	err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+	require.NoError(t, err)
+
+	err = emailer.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
+	require.ErrorContains(t, err, "STARTTLS")
+}

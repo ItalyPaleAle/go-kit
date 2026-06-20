@@ -371,6 +371,16 @@ func TestMux_PatternFormats(t *testing.T) {
 		}
 	})
 
+	t.Run("slash-less host pattern panics instead of silently becoming a path", func(t *testing.T) {
+		// "GET example.com" has a host component but no path
+		// applyPrefix must panic rather than silently registering "GET /api/example.com" as a path match
+		m := NewMux()
+		api := m.Group("/api")
+		require.Panics(t, func() {
+			api.HandleFunc("GET example.com", func(w http.ResponseWriter, r *http.Request) {})
+		})
+	})
+
 	t.Run("Path with wildcard", func(t *testing.T) {
 		// Go 1.22+ supports {name} path wildcards
 		// The prefix must preserve them
