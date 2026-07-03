@@ -18,13 +18,15 @@ import (
 	kitconfig "github.com/italypaleale/go-kit/config"
 )
 
-func getLogLevel(level string) (slog.Level, error) {
+// GetLogLevel returns the parsed slog level
+// Defaults to "info" if empty
+func GetLogLevel(level string) (slog.Level, error) {
 	switch strings.ToLower(level) {
 	case "debug":
 		return slog.LevelDebug, nil
 	case "", "info": // Also default log level
 		return slog.LevelInfo, nil
-	case "warn":
+	case "warn", "warning":
 		return slog.LevelWarn, nil
 	case "error":
 		return slog.LevelError, nil
@@ -43,14 +45,23 @@ type InitLogsOpts struct {
 	Config     kitconfig.Base
 	AppName    string
 	AppVersion string
+
+	// Writer for text and json logs
+	// If empty, defaults to stdout
+	Writer *os.File
 }
 
 // InitLogs initializes a new slog logger and configures it using OpenTelemetry if needed.
 func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdownFn func(ctx context.Context) error, err error) {
 	// Get the level
-	level, err := getLogLevel(opts.Level)
+	level, err := GetLogLevel(opts.Level)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	writer := opts.Writer
+	if writer == nil {
+		writer = os.Stdout
 	}
 
 	// Create the handler
@@ -58,17 +69,17 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 	switch {
 	case opts.JSON:
 		// Log as JSON if configured
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		handler = slog.NewJSONHandler(writer, &slog.HandlerOptions{
 			Level: level,
 		})
-	case isatty.IsTerminal(os.Stdout.Fd()):
+	case isatty.IsTerminal(writer.Fd()):
 		// Enable colors if we have a TTY
-		handler = tint.NewHandler(os.Stdout, &tint.Options{
+		handler = tint.NewHandler(writer, &tint.Options{
 			Level:      level,
 			TimeFormat: time.StampMilli,
 		})
 	default:
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		handler = slog.NewTextHandler(writer, &slog.HandlerOptions{
 			Level: level,
 		})
 	}
