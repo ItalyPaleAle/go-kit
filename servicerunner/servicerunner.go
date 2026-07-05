@@ -1,5 +1,5 @@
 // Package servicerunner manages multiple services (functions that implement [Service]) running concurrently in the background.
-// When any service returns, whether with an error or not, the others are canceled via the context so the group shuts down together.
+// When any service returns, whether with an error or not, the others are canceled via the context so the group shuts down together (unless the service runner is configured with WaitAll = true).
 // The runner waits for all services to complete and returns any errors joined together.
 package servicerunner
 
@@ -14,6 +14,10 @@ type Service func(ctx context.Context) error
 
 // ServiceRunner oversees a number of services running in background
 type ServiceRunner struct {
+	// WaitAll when true makes the service runner not cancel the context when the first service stops
+	// This can be used for shutdown services when each service needs to run till completion
+	WaitAll bool
+
 	services []Service
 }
 
@@ -29,6 +33,9 @@ func (r *ServiceRunner) Run(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
+	// Snapshot "WaitAll" so it can't be changed later
+	waitAll := r.WaitAll
+
 	errCh := make(chan error)
 	for _, service := range r.services {
 		go func(service Service) {
@@ -36,7 +43,9 @@ func (r *ServiceRunner) Run(parentCtx context.Context) error {
 			defer func() {
 				p := recover()
 				if p != nil {
-					cancel()
+					if !waitAll {
+						cancel()
+					}
 					errCh <- fmt.Errorf("service panicked: %v", p)
 				}
 			}()
@@ -54,11 +63,13 @@ func (r *ServiceRunner) Run(parentCtx context.Context) error {
 	}
 
 	// Wait for all services to return
-	// As soon as the first service returns (with an error or cleanly) cancel the context so the remaining services stop too
+	// As soon as the first service returns (with an error or cleanly) cancel the context so the remaining services stop too (unless WaitAll is true)
 	errs := make([]error, 0)
 	for range len(r.services) {
 		err := <-errCh
-		cancel()
+		if !waitAll {
+			cancel()
+		}
 		if err != nil {
 			errs = append(errs, err)
 		}

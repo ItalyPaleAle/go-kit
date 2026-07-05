@@ -168,3 +168,114 @@ func TestServiceRunner_Run(t *testing.T) {
 		require.True(t, cancelObserved.Load(), "the blocking sibling should observe cancellation even after a clean return")
 	})
 }
+
+func TestServiceRunner_WaitAll(t *testing.T) {
+	t.Run("does not cancel siblings when a service errors", func(t *testing.T) {
+		expectedErr := errors.New("service failed")
+		errorService := func(ctx context.Context) error {
+			return expectedErr
+		}
+
+		// If WaitAll is respected, this service should reach its own timer rather than observe cancellation
+		var cancelObserved atomic.Bool
+		sibling := func(ctx context.Context) error {
+			select {
+			case <-ctx.Done():
+				cancelObserved.Store(true)
+				return ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+				return nil
+			}
+		}
+
+		runner := NewServiceRunner(errorService, sibling)
+		runner.WaitAll = true
+
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		err := runner.Run(ctx)
+		require.ErrorIs(t, err, expectedErr)
+		require.False(t, cancelObserved.Load(), "with WaitAll, the sibling's context should not be canceled just because another service errored")
+	})
+
+	t.Run("does not cancel siblings when a service returns cleanly", func(t *testing.T) {
+		quickService := func(ctx context.Context) error {
+			return nil
+		}
+
+		var cancelObserved atomic.Bool
+		sibling := func(ctx context.Context) error {
+			select {
+			case <-ctx.Done():
+				cancelObserved.Store(true)
+				return ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+				return nil
+			}
+		}
+
+		runner := NewServiceRunner(quickService, sibling)
+		runner.WaitAll = true
+
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		err := runner.Run(ctx)
+		require.NoError(t, err)
+		require.False(t, cancelObserved.Load(), "with WaitAll, the sibling's context should not be canceled just because another service returned cleanly")
+	})
+
+	t.Run("still joins errors from every service", func(t *testing.T) {
+		err1 := errors.New("error 1")
+		err2 := errors.New("error 2")
+
+		service1 := func(ctx context.Context) error {
+			return err1
+		}
+		service2 := func(ctx context.Context) error {
+			time.Sleep(200 * time.Millisecond)
+			return err2
+		}
+
+		runner := NewServiceRunner(service1, service2)
+		runner.WaitAll = true
+
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+
+		err := runner.Run(ctx)
+		require.ErrorIs(t, err, err1)
+		require.ErrorIs(t, err, err2)
+	})
+
+	t.Run("cancels remaining services once the parent context is canceled", func(t *testing.T) {
+		// Even with WaitAll, siblings must still react to the parent context being canceled externally
+		var cancelObserved atomic.Bool
+		blockingService := func(ctx context.Context) error {
+			<-ctx.Done()
+			cancelObserved.Store(true)
+			return ctx.Err()
+		}
+
+		runner := NewServiceRunner(blockingService)
+		runner.WaitAll = true
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		errCh := make(chan error)
+		go func() {
+			errCh <- runner.Run(ctx)
+		}()
+
+		cancel()
+
+		select {
+		case err := <-errCh:
+			require.NoError(t, err, "context.Canceled should be ignored")
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for runner to finish")
+		}
+		require.True(t, cancelObserved.Load())
+	})
+}
