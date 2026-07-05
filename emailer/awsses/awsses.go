@@ -70,8 +70,8 @@ func (a *AWSSES) Init(ctx context.Context, opts internal.InitOpts) error {
 }
 
 // SendEmail posts a simple SES v2 payload and signs the request with AWS Signature Version 4
-func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
-	err := internal.ValidateEmailAddress("recipient address", toEmail)
+func (a AWSSES) SendEmail(ctx context.Context, to internal.EmailAddress, subject string, message internal.SendEmailMessage) error {
+	err := internal.ValidateEmailAddress("recipient address", to.Address)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (a AWSSES) SendEmail(ctx context.Context, toEmail string, subject string, m
 			},
 		},
 		Destination: sendEmailDestination{
-			ToAddresses: []string{toEmail},
+			ToAddresses: []string{to.Format()},
 		},
 		FromEmailAddress: a.from,
 	}

@@ -20,6 +20,9 @@ type Emailer = internal.Emailer
 // SendEmailMessage is the content of an email
 type SendEmailMessage = internal.SendEmailMessage
 
+// EmailAddress is an email recipient or sender with an optional display name
+type EmailAddress = internal.EmailAddress
+
 // NewEmailerOpts is the options struct for NewEmailer
 type NewEmailerOpts struct {
 	// Connection string

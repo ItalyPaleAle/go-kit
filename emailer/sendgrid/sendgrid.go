@@ -46,8 +46,8 @@ func (s *SendGridEmailer) Init(ctx context.Context, opts internal.InitOpts) erro
 }
 
 // SendEmail sends an email using SendGrid.
-func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
-	err := internal.ValidateEmailAddress("recipient address", toEmail)
+func (s *SendGridEmailer) SendEmail(ctx context.Context, to internal.EmailAddress, subject string, message internal.SendEmailMessage) error {
+	err := internal.ValidateEmailAddress("recipient address", to.Address)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, toEmail string, subject
 	// Recipients must live inside the personalizations array, not at the top level
 	body := SendGridMessage{
 		Personalizations: []SendGridPersonalization{
-			{To: []SendGridEmail{{Address: toEmail}}},
+			{To: []SendGridEmail{{Name: to.Name, Address: to.Address}}},
 		},
 		From:    s.from,
 		Subject: subject,

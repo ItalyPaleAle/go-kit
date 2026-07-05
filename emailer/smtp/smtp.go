@@ -3,7 +3,9 @@ package smtp
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"mime"
@@ -13,8 +15,10 @@ import (
 	stdsmtp "net/smtp"
 	"net/textproto"
 	"strings"
+	"time"
 
 	"github.com/italypaleale/go-kit/emailer/internal"
+	"github.com/italypaleale/go-kit/utils"
 )
 
 const (
@@ -36,11 +40,12 @@ type SMTPEmailer struct {
 	tlsMode     string
 	tlsConfig   *tls.Config
 	dialContext func(ctx context.Context, network string, address string) (net.Conn, error)
+	now         func() time.Time
 }
 
 // Init validates the SMTP connection string and stores the transport configuration for later sends
 func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
-	const connStringFormat = "smtp://<username>:<password>@<host>:<port>?fromAddress=<address>&fromName=<name>&tls=<auto|starttls|implicit|none>"
+	const connStringFormat = "smtp://<username>:<password>@<host>:<port>?fromAddress=<address>&fromName=<name>&tls=<auto|starttls|implicit|none>&insecureSkipVerify=<true|false>"
 
 	// Validate the connection string scheme and the target server location
 	if opts.ConnString == nil {
@@ -63,6 +68,9 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 	if port == "" {
 		port = defaultPortForTLSMode(tlsMode)
 	}
+
+	// Optionally disable TLS certificate verification for servers that use self-signed or internal-CA certificates
+	insecureSkipVerify := utils.IsTruthy(opts.ConnString.Query().Get("insecureSkipVerify"))
 
 	// Capture credentials when present and reject partial auth configuration
 	username := ""
@@ -108,8 +116,9 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 	// Prepare a reusable TLS config so both implicit TLS and STARTTLS use the same policy
 	if s.tlsConfig == nil {
 		s.tlsConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			ServerName: host,
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         host,
+			InsecureSkipVerify: insecureSkipVerify, //#nosec G402 -- user opt-in
 		}
 	}
 
@@ -119,13 +128,18 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 		s.dialContext = dialer.DialContext
 	}
 
+	// Leave clock injection available for tests while defaulting to the wall clock for the Date header
+	if s.now == nil {
+		s.now = time.Now
+	}
+
 	return nil
 }
 
 // SendEmail sends a MIME email over SMTP using the configured auth and TLS mode
-func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
+func (s SMTPEmailer) SendEmail(ctx context.Context, to internal.EmailAddress, subject string, message internal.SendEmailMessage) error {
 	// Build the MIME message first so transport errors are not mixed with formatting errors
-	payload, err := s.buildMessage(toEmail, subject, message)
+	payload, err := s.buildMessage(to, subject, message)
 	if err != nil {
 		return fmt.Errorf("failed to build SMTP email: %w", err)
 	}
@@ -174,7 +188,7 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 	if err != nil {
 		return fmt.Errorf("failed to set SMTP sender: %w", err)
 	}
-	err = client.Rcpt(toEmail)
+	err = client.Rcpt(to.Address)
 	if err != nil {
 		return fmt.Errorf("failed to set SMTP recipient: %w", err)
 	}
@@ -204,13 +218,17 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, toEmail string, subject stri
 }
 
 // buildMessage renders a UTF-8 MIME email with either one body part or multipart/alternative
-func (s SMTPEmailer) buildMessage(toEmail string, subject string, message internal.SendEmailMessage) ([]byte, error) {
+func (s SMTPEmailer) buildMessage(to internal.EmailAddress, subject string, message internal.SendEmailMessage) ([]byte, error) {
 	// Reject CR/LF in the caller-supplied header values so a crafted recipient or subject cannot inject extra headers or a second body
-	err := validateHeaderValue("recipient address", toEmail)
+	err := validateHeaderValue("recipient name", to.Name)
 	if err != nil {
 		return nil, err
 	}
-	err = internal.ValidateEmailAddress("recipient address", toEmail)
+	err = validateHeaderValue("recipient address", to.Address)
+	if err != nil {
+		return nil, err
+	}
+	err = internal.ValidateEmailAddress("recipient address", to.Address)
 	if err != nil {
 		return nil, err
 	}
@@ -225,17 +243,31 @@ func (s SMTPEmailer) buildMessage(toEmail string, subject string, message intern
 		return nil, err
 	}
 
+	// Generate a Message-ID so relays and spam filters see a stable, unique identifier for the message
+	messageID, err := generateMessageID(messageIDDomain(s.fromAddress))
+	if err != nil {
+		return nil, err
+	}
+
 	// Write the standard headers using CRLF so SMTP servers receive a valid RFC5322 message
 	var payload bytes.Buffer
 	_, err = fmt.Fprintf(&payload, "From: %s\r\n", s.from)
 	if err != nil {
 		return nil, err
 	}
-	_, err = fmt.Fprintf(&payload, "To: %s\r\n", toEmail)
+	_, err = fmt.Fprintf(&payload, "To: %s\r\n", to.Format())
 	if err != nil {
 		return nil, err
 	}
 	_, err = fmt.Fprintf(&payload, "Subject: %s\r\n", encodeHeader(subject))
+	if err != nil {
+		return nil, err
+	}
+	_, err = fmt.Fprintf(&payload, "Date: %s\r\n", s.now().Format(time.RFC1123Z))
+	if err != nil {
+		return nil, err
+	}
+	_, err = fmt.Fprintf(&payload, "Message-ID: %s\r\n", messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -308,13 +340,100 @@ func (s SMTPEmailer) authenticate(client *stdsmtp.Client) error {
 	}
 
 	// Refuse to send credentials when the server does not advertise SMTP AUTH
-	hasAuth, _ := client.Extension("AUTH")
+	hasAuth, mechanisms := client.Extension("AUTH")
 	if !hasAuth {
 		return errors.New("SMTP server does not support AUTH")
 	}
 
-	auth := stdsmtp.PlainAuth("", s.username, s.password, s.host)
+	// Prefer PLAIN and fall back to LOGIN for servers such as some Exchange deployments that only offer the older mechanism
+	var auth stdsmtp.Auth
+	switch {
+	case hasMechanism(mechanisms, "PLAIN"):
+		auth = stdsmtp.PlainAuth("", s.username, s.password, s.host)
+	case hasMechanism(mechanisms, "LOGIN"):
+		auth = &loginAuth{username: s.username, password: s.password, host: s.host}
+	default:
+		return fmt.Errorf("SMTP server does not support PLAIN or LOGIN authentication (offered: %s)", mechanisms)
+	}
+
 	return client.Auth(auth)
+}
+
+// hasMechanism reports whether the space-separated AUTH mechanism list advertised by the server includes the given mechanism
+func hasMechanism(mechanisms string, want string) bool {
+	for m := range strings.FieldsSeq(mechanisms) {
+		if strings.ToUpper(m) == want {
+			return true
+		}
+	}
+
+	return false
+}
+
+// loginAuth implements the non-standard but widely deployed SMTP AUTH LOGIN mechanism
+// net/smtp only ships PLAIN and CRAM-MD5, so servers that offer only LOGIN need this implementation
+type loginAuth struct {
+	username string
+	password string
+	host     string
+}
+
+// Start begins the LOGIN exchange after refusing to leak credentials over an unencrypted, non-local connection
+func (a *loginAuth) Start(server *stdsmtp.ServerInfo) (string, []byte, error) {
+	// Mirror net/smtp's PlainAuth safety check so credentials are never sent over an unencrypted, non-local connection
+	if !server.TLS && !isLocalhost(server.Name) {
+		return "", nil, errors.New("unencrypted connection")
+	}
+	if server.Name != a.host {
+		return "", nil, errors.New("wrong host name")
+	}
+
+	return "LOGIN", nil, nil
+}
+
+// Next answers the server's username and password prompts, which net/smtp delivers already base64-decoded
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+
+	// The prompt wording varies between servers, so match on the leading token rather than the exact string
+	prompt := strings.ToLower(string(fromServer))
+	switch {
+	case strings.HasPrefix(prompt, "user"):
+		return []byte(a.username), nil
+	case strings.HasPrefix(prompt, "pass"):
+		return []byte(a.password), nil
+	default:
+		return nil, fmt.Errorf("unexpected SMTP LOGIN challenge: %q", fromServer)
+	}
+}
+
+// isLocalhost reports whether the server name refers to the local machine, matching net/smtp's own check
+func isLocalhost(name string) bool {
+	return name == "localhost" || name == "127.0.0.1" || name == "::1"
+}
+
+// messageIDDomain extracts the domain from the sender address for use in the Message-ID header
+func messageIDDomain(fromAddress string) string {
+	// Fall back to localhost when the address has no usable domain so the Message-ID stays syntactically valid
+	at := strings.LastIndex(fromAddress, "@")
+	if at < 0 || at == len(fromAddress)-1 {
+		return "localhost"
+	}
+
+	return fromAddress[at+1:]
+}
+
+// generateMessageID builds an RFC5322 Message-ID from random bytes so each message gets a unique identifier
+func generateMessageID(domain string) (string, error) {
+	buf := make([]byte, 16)
+	_, err := rand.Read(buf)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate message ID: %w", err)
+	}
+
+	return "<" + hex.EncodeToString(buf) + "@" + domain + ">", nil
 }
 
 // buildMIMEBody creates either a single-part body or a multipart/alternative body when HTML is present

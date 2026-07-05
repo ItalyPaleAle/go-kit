@@ -19,8 +19,8 @@ type InitOpts struct {
 type Emailer interface {
 	// Init the object with the connection string.
 	Init(ctx context.Context, opts InitOpts) error
-	// SendEmail sends an email to the specified address.
-	SendEmail(ctx context.Context, toEmail string, subject string, message SendEmailMessage) error
+	// SendEmail sends an email to the specified recipient.
+	SendEmail(ctx context.Context, to EmailAddress, subject string, message SendEmailMessage) error
 }
 
 // SendEmailMessage is the content of an email
@@ -29,4 +29,12 @@ type SendEmailMessage struct {
 	Text string
 	// Email content as HTML, which can be empty
 	HTML string
+}
+
+// EmailAddress is an email recipient or sender with an optional display name
+type EmailAddress struct {
+	// Display name, which is optional
+	Name string
+	// Email address
+	Address string
 }

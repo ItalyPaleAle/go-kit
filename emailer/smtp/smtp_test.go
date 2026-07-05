@@ -3,6 +3,7 @@ package smtp
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -39,9 +40,77 @@ func TestInit(t *testing.T) {
 	require.NotNil(t, emailer.dialContext)
 }
 
+func TestInitInsecureSkipVerify(t *testing.T) {
+	t.Run("enabled sets InsecureSkipVerify on the TLS config", func(t *testing.T) {
+		connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com&tls=implicit&insecureSkipVerify=true")
+		require.NoError(t, err)
+
+		var emailer SMTPEmailer
+		err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+		require.NoError(t, err)
+		require.NotNil(t, emailer.tlsConfig)
+		assert.True(t, emailer.tlsConfig.InsecureSkipVerify)
+	})
+
+	t.Run("defaults to certificate verification enabled", func(t *testing.T) {
+		connString, err := url.Parse("smtp://mail.example.com:2525?fromAddress=sender@example.com&tls=implicit")
+		require.NoError(t, err)
+
+		var emailer SMTPEmailer
+		err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+		require.NoError(t, err)
+		require.NotNil(t, emailer.tlsConfig)
+		assert.False(t, emailer.tlsConfig.InsecureSkipVerify)
+	})
+}
+
+func TestBuildMessageHeaders(t *testing.T) {
+	// Pin the clock so the Date header is deterministic and drive buildMessage directly to avoid networking
+	fixedTime := time.Date(2026, 7, 4, 15, 4, 5, 0, time.UTC)
+	emailer := SMTPEmailer{
+		from:        "Sender Name <sender@example.com>",
+		fromAddress: "sender@example.com",
+		now:         func() time.Time { return fixedTime },
+	}
+
+	payload, err := emailer.buildMessage(internal.EmailAddress{Name: "Recipient Name", Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
+	require.NoError(t, err)
+
+	message := string(payload)
+	assert.Contains(t, message, "From: Sender Name <sender@example.com>\r\n")
+	assert.Contains(t, message, "To: Recipient Name <recipient@example.com>\r\n")
+	assert.Contains(t, message, "Date: "+fixedTime.Format(time.RFC1123Z)+"\r\n")
+	// The Message-ID uses random bytes but is always scoped to the sender's domain
+	assert.Regexp(t, `Message-ID: <[0-9a-f]{32}@example\.com>\r\n`, message)
+}
+
+func TestSendEmailUsesLoginAuthWhenServerOffersLogin(t *testing.T) {
+	// A server that advertises only AUTH LOGIN must trigger the LOGIN fallback instead of PLAIN
+	server := newSMTPTestServer(t, "LOGIN")
+	host, port, err := net.SplitHostPort(server.address())
+	require.NoError(t, err)
+
+	connString, err := url.Parse(fmt.Sprintf("smtp://mailer:secret@%s:%s?fromAddress=sender@example.com&tls=none", host, port))
+	require.NoError(t, err)
+
+	var emailer SMTPEmailer
+	err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+	require.NoError(t, err)
+
+	err = emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
+	require.NoError(t, err)
+
+	// Confirm the client authenticated with LOGIN and sent the credentials the server decoded
+	session, sessionErr := server.wait()
+	require.NoError(t, sessionErr)
+	assert.Equal(t, "AUTH LOGIN", session.authCommand)
+	assert.Equal(t, "mailer", session.authUsername)
+	assert.Equal(t, "secret", session.authPassword)
+}
+
 func TestSendEmail(t *testing.T) {
 	// Start a local SMTP server so the test can verify the wire-level SMTP session and MIME payload
-	server := newSMTPTestServer(t)
+	server := newSMTPTestServer(t, "PLAIN")
 	host, port, err := net.SplitHostPort(server.address())
 	require.NoError(t, err)
 
@@ -53,7 +122,7 @@ func TestSendEmail(t *testing.T) {
 	require.NoError(t, err)
 
 	// Send a multipart message so the test covers auth, envelope, and MIME body generation together
-	err = emailer.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{
+	err = emailer.SendEmail(t.Context(), internal.EmailAddress{Name: "Recipient Name", Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{
 		Text: "Plain body",
 		HTML: "<p>HTML body</p>",
 	})
@@ -66,8 +135,12 @@ func TestSendEmail(t *testing.T) {
 	assert.Equal(t, "<sender@example.com>", session.mailFrom)
 	assert.Equal(t, "<recipient@example.com>", session.rcptTo)
 	assert.Contains(t, session.message, "From: Sender Name <sender@example.com>\r\n")
-	assert.Contains(t, session.message, "To: recipient@example.com\r\n")
+	// The recipient display name must appear in the To header while the envelope keeps the bare address
+	assert.Contains(t, session.message, "To: Recipient Name <recipient@example.com>\r\n")
 	assert.Contains(t, session.message, "Subject: Hello\r\n")
+	// A Date header and a Message-ID scoped to the sender domain are emitted so relays and spam filters see a complete message
+	assert.Contains(t, session.message, "Date: ")
+	assert.Regexp(t, `Message-ID: <[0-9a-f]{32}@example\.com>\r\n`, session.message)
 	assert.Contains(t, session.message, "Content-Type: multipart/alternative; boundary=")
 	assert.Contains(t, session.message, "Content-Type: text/plain; charset=UTF-8")
 	assert.Contains(t, session.message, "Content-Type: text/html; charset=UTF-8")
@@ -111,13 +184,19 @@ func TestSendEmailRejectsHeaderInjection(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("CRLF in recipient is rejected", func(t *testing.T) {
-		err := emailer.SendEmail(t.Context(), "victim@example.com\r\nBcc: attacker@evil.example", "Hello", internal.SendEmailMessage{Text: "Body"})
+		err := emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "victim@example.com\r\nBcc: attacker@evil.example"}, "Hello", internal.SendEmailMessage{Text: "Body"})
 		require.ErrorContains(t, err, "recipient address")
 		require.ErrorContains(t, err, "must not contain CR or LF")
 	})
 
+	t.Run("CRLF in recipient name is rejected", func(t *testing.T) {
+		err := emailer.SendEmail(t.Context(), internal.EmailAddress{Name: "Victim\r\nBcc: attacker@evil.example", Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
+		require.ErrorContains(t, err, "recipient name")
+		require.ErrorContains(t, err, "must not contain CR or LF")
+	})
+
 	t.Run("bare LF in subject is rejected", func(t *testing.T) {
-		err := emailer.SendEmail(t.Context(), "recipient@example.com", "Hello\nBcc: attacker@evil.example", internal.SendEmailMessage{Text: "Body"})
+		err := emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello\nBcc: attacker@evil.example", internal.SendEmailMessage{Text: "Body"})
 		require.ErrorContains(t, err, "subject")
 		require.ErrorContains(t, err, "must not contain CR or LF")
 	})
@@ -156,7 +235,7 @@ func TestSendEmailHonorsContextDeadline(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- emailer.SendEmail(ctx, "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
+		done <- emailer.SendEmail(ctx, internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
 	}()
 
 	select {
@@ -168,28 +247,32 @@ func TestSendEmailHonorsContextDeadline(t *testing.T) {
 }
 
 type smtpTestSession struct {
-	authCommand string
-	mailFrom    string
-	rcptTo      string
-	message     string
-	commands    []string
+	authCommand  string
+	authUsername string
+	authPassword string
+	mailFrom     string
+	rcptTo       string
+	message      string
+	commands     []string
 }
 
 type smtpTestServer struct {
-	listener  net.Listener
-	sessionCh chan smtpTestSession
-	errorCh   chan error
+	listener       net.Listener
+	authMechanisms string
+	sessionCh      chan smtpTestSession
+	errorCh        chan error
 }
 
-func newSMTPTestServer(t *testing.T) *smtpTestServer {
+func newSMTPTestServer(t *testing.T, authMechanisms string) *smtpTestServer {
 	// Bind an ephemeral local port so tests can run in parallel without conflicting listeners
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	server := &smtpTestServer{
-		listener:  listener,
-		sessionCh: make(chan smtpTestSession, 1),
-		errorCh:   make(chan error, 1),
+		listener:       listener,
+		authMechanisms: authMechanisms,
+		sessionCh:      make(chan smtpTestSession, 1),
+		errorCh:        make(chan error, 1),
 	}
 	go server.serve()
 
@@ -260,7 +343,11 @@ func (s *smtpTestServer) handleConn(conn net.Conn) (smtpTestSession, error) {
 
 		switch {
 		case strings.HasPrefix(line, "EHLO "):
-			err = writeSMTPResponse(writer, "250-localhost ESMTP test", "250 AUTH PLAIN")
+			err = writeSMTPResponse(writer, "250-localhost ESMTP test", "250 AUTH "+s.authMechanisms)
+		case strings.HasPrefix(line, "AUTH LOGIN"):
+			session.authCommand = line
+			// LOGIN is a multi-step exchange where the server prompts for the base64-encoded username and password in turn
+			session.authUsername, session.authPassword, err = handleLoginAuth(reader, writer)
 		case strings.HasPrefix(line, "AUTH "):
 			session.authCommand = line
 			err = writeSMTPResponse(writer, "235 2.7.0 Authentication successful")
@@ -329,9 +416,53 @@ func readSMTPData(reader *bufio.Reader) (string, error) {
 	}
 }
 
+// handleLoginAuth drives the server side of the SMTP AUTH LOGIN exchange and returns the decoded credentials
+func handleLoginAuth(reader *bufio.Reader, writer *bufio.Writer) (username string, password string, err error) {
+	// Prompt for the username, then decode the client's base64-encoded reply
+	err = writeSMTPResponse(writer, "334 "+base64.StdEncoding.EncodeToString([]byte("Username:")))
+	if err != nil {
+		return "", "", err
+	}
+	username, err = readBase64Line(reader)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Prompt for the password next, following the same base64 challenge/response pattern
+	err = writeSMTPResponse(writer, "334 "+base64.StdEncoding.EncodeToString([]byte("Password:")))
+	if err != nil {
+		return "", "", err
+	}
+	password, err = readBase64Line(reader)
+	if err != nil {
+		return "", "", err
+	}
+
+	err = writeSMTPResponse(writer, "235 2.7.0 Authentication successful")
+	if err != nil {
+		return "", "", err
+	}
+
+	return username, password, nil
+}
+
+// readBase64Line reads one CRLF-terminated line and decodes its base64 payload
+func readBase64Line(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimRight(line, "\r\n"))
+	if err != nil {
+		return "", err
+	}
+
+	return string(decoded), nil
+}
+
 func TestSendEmailAutoTLSFailsIfStartTLSNotSupported(t *testing.T) {
 	// The test server's EHLO response does not include STARTTLS tls=auto must refuse to send rather than silently downgrade to plaintext
-	server := newSMTPTestServer(t)
+	server := newSMTPTestServer(t, "PLAIN")
 	host, port, err := net.SplitHostPort(server.address())
 	require.NoError(t, err)
 
@@ -342,6 +473,6 @@ func TestSendEmailAutoTLSFailsIfStartTLSNotSupported(t *testing.T) {
 	err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
 	require.NoError(t, err)
 
-	err = emailer.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
+	err = emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
 	require.ErrorContains(t, err, "STARTTLS")
 }

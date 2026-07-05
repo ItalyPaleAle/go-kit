@@ -16,6 +16,11 @@ func FormatFromAddress(fromName string, fromAddress string) string {
 	return fromName + " <" + fromAddress + ">"
 }
 
+// Format renders the address in the "Name <address>" form when a display name is set, or the bare address otherwise
+func (a EmailAddress) Format() string {
+	return FormatFromAddress(a.Name, a.Address)
+}
+
 // ValidateEmailAddress returns an error if addr is not a parseable RFC 5322 email address
 func ValidateEmailAddress(field, addr string) error {
 	_, err := mail.ParseAddress(addr)

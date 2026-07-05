@@ -67,7 +67,8 @@ func TestSendEmail(t *testing.T) {
 		if !ok {
 			return fmt.Errorf("destination has unexpected type: %#v", payload["Destination"])
 		}
-		if !assert.ObjectsAreEqual([]any{"recipient@example.com"}, destination["ToAddresses"]) {
+		// The recipient display name must be preserved in the RFC-822 formatted destination address
+		if !assert.ObjectsAreEqual([]any{"Recipient Name <recipient@example.com>"}, destination["ToAddresses"]) {
 			return fmt.Errorf("unexpected to addresses: %#v", destination["ToAddresses"])
 		}
 
@@ -135,7 +136,7 @@ func TestSendEmail(t *testing.T) {
 	}
 
 	// Send both text and HTML content because the request builder handles them differently
-	err := emailer.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{
+	err := emailer.SendEmail(t.Context(), internal.EmailAddress{Name: "Recipient Name", Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{
 		Text: "Plain body",
 		HTML: "<p>HTML body</p>",
 	})
@@ -162,7 +163,7 @@ func TestSendEmailReturnsRemoteErrors(t *testing.T) {
 	}
 
 	// The returned error should preserve both the status code and the SES message text
-	err := emailer.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
+	err := emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to send email (400):")
 	require.ErrorContains(t, err, "MessageRejected")

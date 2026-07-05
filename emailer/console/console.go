@@ -19,11 +19,12 @@ func (s *ConsoleEmailer) Init(ctx context.Context, opts internal.InitOpts) error
 	return nil
 }
 
-// SendEmail sends an email using SendGrid.
-func (s *ConsoleEmailer) SendEmail(ctx context.Context, toEmail string, subject string, message internal.SendEmailMessage) error {
+// SendEmail prints the email to the console instead of delivering it.
+func (s *ConsoleEmailer) SendEmail(ctx context.Context, to internal.EmailAddress, subject string, message internal.SendEmailMessage) error {
 	// Print the email as log
 	s.log.InfoContext(ctx, "Invoked SendEmail on ConsoleEmailer",
-		slog.String("to", toEmail),
+		slog.String("toName", to.Name),
+		slog.String("toAddress", to.Address),
 		slog.String("subject", subject),
 		slog.String("text", message.Text),
 		slog.String("html", message.HTML),

@@ -105,7 +105,7 @@ func TestSendEmail(t *testing.T) {
 	resCh <- httpResponse(t, http.StatusAccepted, "") //nolint:bodyclose
 
 	// Send both text and HTML so the content-array ordering is exercised
-	err := e.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{
+	err := e.SendEmail(t.Context(), internal.EmailAddress{Name: "Recipient Name", Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{
 		Text: "Plain body",
 		HTML: "<p>HTML body</p>",
 	})
@@ -142,6 +142,8 @@ func TestSendEmail(t *testing.T) {
 	to0, ok := to[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "recipient@example.com", to0["email"])
+	// The recipient display name must flow through to the personalization entry
+	assert.Equal(t, "Recipient Name", to0["name"])
 
 	// From is an object with email plus an optional name
 	from, ok := payload["from"].(map[string]any)
@@ -174,7 +176,7 @@ func TestSendEmailOmitsHTMLWhenEmpty(t *testing.T) {
 	resCh <- httpResponse(t, http.StatusAccepted, "") //nolint:bodyclose
 
 	// An empty HTML body must not produce a text/html content entry
-	err := e.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Plain body"})
+	err := e.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Plain body"})
 	require.NoError(t, err)
 
 	req := <-reqCh
@@ -205,7 +207,7 @@ func TestSendEmailReturnsRemoteErrors(t *testing.T) {
 	// Return a SendGrid-like rejection so the test can verify the status code and body are surfaced
 	resCh <- httpResponse(t, http.StatusBadRequest, `{"errors":[{"message":"bad request"}]}`) //nolint:bodyclose
 
-	err := e.SendEmail(t.Context(), "recipient@example.com", "Hello", internal.SendEmailMessage{Text: "Body"})
+	err := e.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to send email (400):")
 	require.ErrorContains(t, err, "bad request")
