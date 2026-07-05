@@ -66,21 +66,17 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 
 	// Create the handler
 	var handler slog.Handler
-	switch {
-	case opts.JSON:
+	if opts.JSON {
 		// Log as JSON if configured
 		handler = slog.NewJSONHandler(writer, &slog.HandlerOptions{
 			Level: level,
 		})
-	case isatty.IsTerminal(writer.Fd()):
+	} else {
 		// Enable colors if we have a TTY
 		handler = tint.NewHandler(writer, &tint.Options{
 			Level:      level,
 			TimeFormat: time.StampMilli,
-		})
-	default:
-		handler = slog.NewTextHandler(writer, &slog.HandlerOptions{
-			Level: level,
+			NoColor:    !isatty.IsTerminal(writer.Fd()),
 		})
 	}
 
