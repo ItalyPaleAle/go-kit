@@ -1,6 +1,6 @@
 module github.com/italypaleale/go-kit
 
-go 1.26.3
+go 1.26.5
 
 tool github.com/fchimpan/gomod-age
 
@@ -8,8 +8,8 @@ require (
 	github.com/alphadose/haxmap v1.4.1
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/getkin/kin-openapi v0.140.0
-	github.com/lmittmann/tint v1.1.3
-	github.com/mattn/go-isatty v0.0.22
+	github.com/lmittmann/tint v1.2.0
+	github.com/mattn/go-isatty v0.0.23
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.19.0
@@ -21,10 +21,10 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/log v0.20.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
-	k8s.io/utils v0.0.0-20260507154919-ff6756f316d2
+	golang.org/x/exp v0.0.0-20260718201538-764159d718ef
+	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
 	sigs.k8s.io/yaml v1.6.0
-	tailscale.com v1.98.8
+	tailscale.com v1.98.9
 )
 
 require (
@@ -114,8 +114,8 @@ require (
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.12.0 // indirect

@@ -73,7 +73,7 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 		})
 	} else {
 		// Enable colors if we have a TTY
-		handler = tint.NewHandler(writer, &tint.Options{
+		handler = tint.NewTextHandler(writer, &tint.Options{
 			Level:      level,
 			TimeFormat: time.StampMilli,
 			NoColor:    !isatty.IsTerminal(writer.Fd()),
