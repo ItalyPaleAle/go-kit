@@ -24,7 +24,7 @@ require (
 	golang.org/x/exp v0.0.0-20260718201538-764159d718ef
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
 	sigs.k8s.io/yaml v1.6.0
-	tailscale.com v1.98.10
+	tailscale.com v1.102.1
 )
 
 require (
