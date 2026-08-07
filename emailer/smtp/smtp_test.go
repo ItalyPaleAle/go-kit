@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,9 @@ func TestInit(t *testing.T) {
 	assert.Equal(t, "secret", emailer.password)
 	assert.Equal(t, "Sender Name <sender@example.com>", emailer.from)
 	assert.Equal(t, "sender@example.com", emailer.fromAddress)
+	hostname, err := os.Hostname()
+	require.NoError(t, err)
+	assert.Equal(t, hostname, emailer.localName)
 	assert.Equal(t, smtpTLSNone, emailer.tlsMode)
 	require.NotNil(t, emailer.tlsConfig)
 	require.NotNil(t, emailer.dialContext)
@@ -148,6 +152,70 @@ func TestSendEmail(t *testing.T) {
 	assert.Contains(t, session.message, "<p>HTML body</p>")
 	assert.Contains(t, session.commands, "MAIL FROM:<sender@example.com>")
 	assert.Contains(t, session.commands, "RCPT TO:<recipient@example.com>")
+}
+
+func TestSendEmailSetsHostnameBeforeStartTLS(t *testing.T) {
+	// Reject the first greeting after recording it so the test covers the pre-STARTTLS command without needing a TLS certificate
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	type probeResult struct {
+		command string
+		err     error
+	}
+	resultCh := make(chan probeResult, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			resultCh <- probeResult{err: acceptErr}
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+		responseErr := writeSMTPResponse(writer, "220 localhost ESMTP test")
+		if responseErr != nil {
+			resultCh <- probeResult{err: responseErr}
+			return
+		}
+
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			resultCh <- probeResult{err: readErr}
+			return
+		}
+		responseErr = writeSMTPResponse(writer, "421 greeting rejected")
+		if responseErr != nil {
+			resultCh <- probeResult{err: responseErr}
+			return
+		}
+
+		resultCh <- probeResult{command: strings.TrimRight(line, "\r\n")}
+	}()
+
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+	connString, err := url.Parse(fmt.Sprintf("smtp://%s:%s?fromAddress=sender@example.com&tls=starttls", host, port))
+	require.NoError(t, err)
+
+	var emailer SMTPEmailer
+	err = emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+	require.NoError(t, err)
+	emailer.localName = "pocket-id.example.test"
+
+	err = emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
+	require.ErrorContains(t, err, "failed to send SMTP greeting")
+
+	var result probeResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SMTP greeting probe timed out")
+	}
+	require.NoError(t, result.err)
+	assert.Equal(t, "EHLO pocket-id.example.test", result.command)
 }
 
 func TestInitRejectsHeaderInjection(t *testing.T) {
