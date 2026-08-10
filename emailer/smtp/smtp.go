@@ -14,6 +14,7 @@ import (
 	"net"
 	stdsmtp "net/smtp"
 	"net/textproto"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type SMTPEmailer struct {
 	password    string
 	from        string
 	fromAddress string
+	localName   string
 	tlsMode     string
 	tlsConfig   *tls.Config
 	dialContext func(ctx context.Context, network string, address string) (net.Conn, error)
@@ -104,12 +106,19 @@ func (s *SMTPEmailer) Init(_ context.Context, opts internal.InitOpts) error {
 		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
 	}
 
+	// Use the operating-system hostname so SMTP relays receive a real client identity instead of net/smtp's localhost default
+	localName, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("failed to get SMTP client hostname: %w", err)
+	}
+
 	s.host = host
 	s.port = port
 	s.address = net.JoinHostPort(host, port)
 	s.username = username
 	s.password = password
 	s.fromAddress = fromAddress
+	s.localName = localName
 	s.tlsMode = tlsMode
 	s.from = internal.FormatFromAddress(fromName, fromAddress)
 
@@ -170,6 +179,12 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, to internal.EmailAddress, su
 	defer func() {
 		_ = client.Close()
 	}()
+
+	// Set the client hostname before STARTTLS because net/smtp otherwise sends EHLO localhost and some relays reject it
+	err = client.Hello(s.localName)
+	if err != nil {
+		return fmt.Errorf("failed to send SMTP greeting: %w", err)
+	}
 
 	// Upgrade the connection before auth when the selected mode requires transport security
 	err = s.configureTLS(client)
