@@ -7,9 +7,9 @@
   ],
   "allow": [
     {
-      "module": "github.com/quic-go/webtransport-go",
-      "version": "v0.10.0",
-      "reason": "forked"
+      "module": "github.com/stretchr/testify",
+      "version": "v1.12.1",
+      "reason": ""
     }
   ]
 }
