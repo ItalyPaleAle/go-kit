@@ -17,8 +17,8 @@ type ApiError struct {
 
 // NewApiError creates a new ApiError with the specified code, HTTP status, and message.
 // The HTTP status code determines what status will be written to the response when WriteResponse is called.
-func NewApiError(code string, httpStatus int, message string) *ApiError {
-	return &ApiError{
+func NewApiError(code string, httpStatus int, message string) ApiError {
+	return ApiError{
 		Code:    code,
 		Message: message,
 
@@ -38,8 +38,8 @@ func (e ApiError) WriteResponse(w http.ResponseWriter, r *http.Request) {
 
 // Clone creates a deep copy of the ApiError and optionally applies modifications through the provided functions. This is useful for creating variations of an error without modifying the original.
 // The with parameter accepts functions like WithInnerError and WithMetadata to customize the cloned error.
-func (e ApiError) Clone(with ...func(*ApiError)) *ApiError {
-	cloned := &ApiError{
+func (e ApiError) Clone(with ...func(*ApiError)) ApiError {
+	cloned := ApiError{
 		Code:    e.Code,
 		Message: e.Message,
 
@@ -47,7 +47,7 @@ func (e ApiError) Clone(with ...func(*ApiError)) *ApiError {
 	}
 
 	for _, w := range with {
-		w(cloned)
+		w(&cloned)
 	}
 
 	return cloned

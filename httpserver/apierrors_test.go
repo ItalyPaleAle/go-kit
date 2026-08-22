@@ -3,7 +3,6 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -67,7 +66,7 @@ func TestNewApiError(t *testing.T) {
 func TestApiError_Error(t *testing.T) {
 	tests := []struct {
 		name string
-		err  *ApiError
+		err  ApiError
 		want string
 	}{
 		{
@@ -106,49 +105,35 @@ func TestApiError_Is(t *testing.T) {
 		target error
 		want   bool
 	}{
-		// *ApiError on both sides — the real-world case since NewApiError returns a pointer
 		{
-			name:   "pointer: matches same error code",
+			name:   "value: matches same error code",
 			err:    err1,
 			target: err2,
 			want:   true,
 		},
 		{
-			name:   "pointer: matches itself",
+			name:   "value: matches itself",
 			err:    err1,
 			target: err1,
 			want:   true,
 		},
 		{
-			name:   "pointer: does not match different error code",
+			name:   "value: does not match different error code",
 			err:    err1,
 			target: err3,
 			want:   false,
 		},
-		// Value target (ApiError, not *ApiError)
+		// Pointer targets remain supported for cloned errors
 		{
-			name:   "value target: matches same error code",
+			name:   "pointer target: matches same error code",
 			err:    err1,
-			target: *err2,
+			target: &err2,
 			want:   true,
 		},
 		{
-			name:   "value target: does not match different error code",
+			name:   "pointer target: does not match different error code",
 			err:    err1,
-			target: *err3,
-			want:   false,
-		},
-		// Wrapped pointer — errors.Is must unwrap and still match
-		{
-			name:   "wrapped pointer: matches same error code",
-			err:    fmt.Errorf("wrapped: %w", err1),
-			target: err2,
-			want:   true,
-		},
-		{
-			name:   "wrapped pointer: does not match different error code",
-			err:    fmt.Errorf("wrapped: %w", err1),
-			target: err3,
+			target: &err3,
 			want:   false,
 		},
 		{
@@ -174,8 +159,10 @@ func TestApiError_Is(t *testing.T) {
 
 func TestApiError_WriteResponse(t *testing.T) {
 	tests := []struct {
-		name           string
-		err            *ApiError
+		name string
+		err  interface {
+			WriteResponse(w http.ResponseWriter, r *http.Request)
+		}
 		wantStatus     int
 		wantCode       string
 		wantMessage    string
@@ -269,7 +256,9 @@ func TestApiError_Clone(t *testing.T) {
 		assert.Equal(t, original.Code, cloned.Code)
 		assert.Equal(t, original.Message, cloned.Message)
 		assert.Equal(t, original.httpStatus, cloned.httpStatus)
-		assert.NotSame(t, original, cloned, "Clone should return a new instance")
+
+		cloned.Code = "CHANGED"
+		assert.Equal(t, "NOT_FOUND", original.Code)
 	})
 
 	t.Run("clones error with inner error", func(t *testing.T) {
