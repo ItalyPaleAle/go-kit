@@ -6,10 +6,5 @@
     "tailscale.com"
   ],
   "allow": [
-    {
-      "module": "github.com/stretchr/testify",
-      "version": "v1.12.1",
-      "reason": ""
-    }
   ]
 }
