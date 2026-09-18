@@ -122,6 +122,22 @@ func (s *fakeStore) position() Position {
 	return s.pos
 }
 
+// add appends an event, as a write to the audit table would
+func (s *fakeStore) add(events ...Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.events = append(s.events, events...)
+}
+
+// reads returns how many times the shipper has gone to the store for events
+func (s *fakeStore) reads() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.listCalls
+}
+
 // seqEvent builds a test event whose shipping key is seq
 func seqEvent(seq int64, eventType string) Event {
 	return Event{
@@ -802,5 +818,75 @@ func TestShipperHonoursThePrivateIPPolicy(t *testing.T) {
 		_ = res.Body.Close()
 
 		assert.Equal(t, http.StatusOK, res.StatusCode)
+	})
+}
+
+func TestShipperCoalescesABurstOfNudges(t *testing.T) {
+	collector := newTestCollector(t)
+	store := newFakeStore()
+	s, clock := newTestShipper(t, store, collector.URL, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.Run(ctx)
+	}()
+
+	// Let the first, empty read happen so the loop is parked on its select
+	require.Eventually(t, func() bool {
+		return store.reads() > 0
+	}, 10*time.Second, 5*time.Millisecond, "timed out waiting for the first read")
+
+	readsBeforeNudge := store.reads()
+
+	// The first event of a burst
+	store.add(seqEvent(1, "order.create"))
+	s.Nudge()
+
+	// Acting on it straight away would ship it alone, and send the rest of the burst one request at a time
+	require.Never(t, func() bool {
+		return store.reads() > readsBeforeNudge
+	}, 100*time.Millisecond, 10*time.Millisecond, "the shipper read the store before the batch window closed")
+
+	// The rest of the burst lands while the window is open
+	store.add(seqEvent(2, "order.confirm"), seqEvent(3, "order.cancel"))
+
+	// Closing the window ships all three together
+	// The clock is stepped repeatedly because the loop registers its wait asynchronously
+	require.Eventually(t, func() bool {
+		clock.Step(nudgeBatchWindow)
+		return collector.count() > 0
+	}, 10*time.Second, 10*time.Millisecond, "timed out waiting for the batch")
+
+	cancel()
+	<-done
+
+	requests := collector.all()
+	require.Len(t, requests, 1)
+	assert.Equal(t, "3", requests[0].header.Get("X-Testapp-Batch-Count"))
+	assert.Equal(t, int64(3), store.position().Seq)
+}
+
+func TestShipperNudgeWindowNeverExceedsTheFlushInterval(t *testing.T) {
+	collector := newTestCollector(t)
+
+	t.Run("uses the batch window when the flush interval is longer", func(t *testing.T) {
+		s, _ := newTestShipper(t, newFakeStore(), collector.URL, func(o *ShipperOptions) {
+			o.FlushInterval = time.Minute
+		})
+
+		assert.Equal(t, nudgeBatchWindow, s.nudgeWindow())
+	})
+
+	t.Run("clamps to the flush interval when that is shorter", func(t *testing.T) {
+		// Holding a nudge longer than the regular poll would make it worse than no nudge at all
+		s, _ := newTestShipper(t, newFakeStore(), collector.URL, func(o *ShipperOptions) {
+			o.FlushInterval = time.Second
+		})
+
+		assert.Equal(t, time.Second, s.nudgeWindow())
 	})
 }

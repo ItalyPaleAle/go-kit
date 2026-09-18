@@ -28,6 +28,9 @@ const (
 
 	// stallLogThreshold is how long a non-retryable response has to persist before it is logged at error level
 	stallLogThreshold = 5 * time.Minute
+
+	// nudgeBatchWindow is how long the loop holds a nudge before reading, so a burst of inserts ships as one batch instead of one request per event
+	nudgeBatchWindow = 1500 * time.Millisecond
 )
 
 // errBatchTooLarge signals that the collector rejected the body as too large
@@ -242,12 +245,28 @@ func validateURL(raw string) error {
 }
 
 // Nudge wakes the loop early so a freshly-written event does not have to wait out the flush interval
+// It never blocks
 func (s *Shipper) Nudge() {
 	select {
 	case s.nudge <- struct{}{}:
 	default:
 		// A wake-up is already pending
 	}
+}
+
+// clearNudge consumes a pending wake-up
+// It runs immediately before a read, so that a nudge arriving during that read survives into the next cycle rather than being swallowed by it
+func (s *Shipper) clearNudge() {
+	select {
+	case <-s.nudge:
+	default:
+	}
+}
+
+// nudgeWindow is how long a nudge is held before reading
+func (s *Shipper) nudgeWindow() time.Duration {
+	// Ensure it's never less than the flush interval
+	return min(nudgeBatchWindow, s.flushInterval)
 }
 
 // Run ships events until ctx is canceled
@@ -262,6 +281,9 @@ func (s *Shipper) Run(ctx context.Context) error {
 	defer s.log.InfoContext(ctx, "Audit log SIEM shipper stopped")
 
 	for {
+		// Clear any nudge that may be present
+		s.clearNudge()
+
 		err := s.drain(ctx)
 		if err != nil {
 			// The only error that reaches here is a canceled context
@@ -272,6 +294,12 @@ func (s *Shipper) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-s.nudge:
+			// Hold the burst together rather than reading on the first insert
+			// Whatever else lands in the window is picked up by the same read, and the nudges it raises are cleared at the top of the loop
+			err = s.wait(ctx, s.nudgeWindow())
+			if err != nil {
+				return nil
+			}
 		case <-s.clock.After(s.flushInterval):
 		}
 	}
