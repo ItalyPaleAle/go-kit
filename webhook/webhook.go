@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/italypaleale/go-kit/internal/webhooktransport"
+
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	kclock "k8s.io/utils/clock"
 )
@@ -114,7 +116,7 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 			// Disable automatic redirect following to prevent SSRF via redirects to internal IPs
 			return http.ErrUseLastResponse
 		},
-		Transport: otelhttp.NewTransport(newTransport()),
+		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{})),
 	}
 
 	// Create the webhook client object

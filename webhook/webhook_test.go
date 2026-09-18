@@ -645,3 +645,28 @@ func stepUntilWaiters(clock *clocktesting.FakeClock, step time.Duration, max tim
 	}
 	return nil
 }
+
+func TestWebhookClientRefusesPrivateDestinations(t *testing.T) {
+	// The webhook points at a third-party service, so a private destination is always a misconfiguration
+	// This checks the wiring, not the guard itself, which internal/webhooktransport covers
+	w, err := newWebhookInternal(NewWebhookOpts{
+		URL:    "http://10.0.0.25/hook",
+		Logger: slog.New(slog.DiscardHandler),
+		clock:  clocktesting.NewFakeClock(time.Now()),
+	})
+	require.NoError(t, err)
+
+	wh, ok := w.(*webhookClient)
+	require.True(t, ok)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, wh.webhookURL, nil)
+	require.NoError(t, err)
+
+	res, err := wh.httpClient.Do(req)
+	if res != nil {
+		_ = res.Body.Close()
+	}
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "refusing to dial private/internal IP")
+}

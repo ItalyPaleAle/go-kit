@@ -24,6 +24,7 @@ A collection of utility packages for Go applications.
 - **ttlcache**: An efficient generic cache with TTL (time-to-live) expiration. Provides concurrent access via HaxMap with automatic background garbage collection of expired items.
 - **utils**: Small general-purpose helpers.
 - **webhook**: Webhook client utilities for plain-text and Slack-compatible payloads, with retries, OpenTelemetry transport instrumentation, and SSRF protections.
+- **auditlogs/siem**: Streams audit log events to an external HTTP collector (a SIEM) as NDJSON or batched JSON. Reads events and persists its cursor through an application-provided store, so delivery is at-least-once and survives process restarts and collector outages, with retries, OpenTelemetry transport instrumentation, and optional SSRF protections.
 
 ## Tools
 
