@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/mail"
 	"net/url"
 	"os"
 	"strings"
@@ -34,7 +35,7 @@ func TestInit(t *testing.T) {
 	assert.Equal(t, "mail.example.com:2525", emailer.address)
 	assert.Equal(t, "mailer", emailer.username)
 	assert.Equal(t, "secret", emailer.password)
-	assert.Equal(t, "Sender Name <sender@example.com>", emailer.from)
+	assert.Equal(t, "\"Sender Name\" <sender@example.com>", emailer.from)
 	assert.Equal(t, "sender@example.com", emailer.fromAddress)
 	hostname, err := os.Hostname()
 	require.NoError(t, err)
@@ -72,7 +73,7 @@ func TestBuildMessageHeaders(t *testing.T) {
 	// Pin the clock so the Date header is deterministic and drive buildMessage directly to avoid networking
 	fixedTime := time.Date(2026, 7, 4, 15, 4, 5, 0, time.UTC)
 	emailer := SMTPEmailer{
-		from:        "Sender Name <sender@example.com>",
+		from:        "\"Sender Name\" <sender@example.com>",
 		fromAddress: "sender@example.com",
 		now:         func() time.Time { return fixedTime },
 	}
@@ -81,8 +82,8 @@ func TestBuildMessageHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	message := string(payload)
-	assert.Contains(t, message, "From: Sender Name <sender@example.com>\r\n")
-	assert.Contains(t, message, "To: Recipient Name <recipient@example.com>\r\n")
+	assert.Contains(t, message, "From: \"Sender Name\" <sender@example.com>\r\n")
+	assert.Contains(t, message, "To: \"Recipient Name\" <recipient@example.com>\r\n")
 	assert.Contains(t, message, "Date: "+fixedTime.Format(time.RFC1123Z)+"\r\n")
 	// The Message-ID uses random bytes but is always scoped to the sender's domain
 	assert.Regexp(t, `Message-ID: <[0-9a-f]{32}@example\.com>\r\n`, message)
@@ -138,9 +139,9 @@ func TestSendEmail(t *testing.T) {
 	assert.Contains(t, session.authCommand, "AUTH PLAIN")
 	assert.Equal(t, "<sender@example.com>", session.mailFrom)
 	assert.Equal(t, "<recipient@example.com>", session.rcptTo)
-	assert.Contains(t, session.message, "From: Sender Name <sender@example.com>\r\n")
+	assert.Contains(t, session.message, "From: \"Sender Name\" <sender@example.com>\r\n")
 	// The recipient display name must appear in the To header while the envelope keeps the bare address
-	assert.Contains(t, session.message, "To: Recipient Name <recipient@example.com>\r\n")
+	assert.Contains(t, session.message, "To: \"Recipient Name\" <recipient@example.com>\r\n")
 	assert.Contains(t, session.message, "Subject: Hello\r\n")
 	// A Date header and a Message-ID scoped to the sender domain are emitted so relays and spam filters see a complete message
 	assert.Contains(t, session.message, "Date: ")
@@ -543,4 +544,44 @@ func TestSendEmailAutoTLSFailsIfStartTLSNotSupported(t *testing.T) {
 
 	err = emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
 	require.ErrorContains(t, err, "STARTTLS")
+}
+
+func TestSendEmailEncodesDisplayNames(t *testing.T) {
+	for _, name := range []string{"Max Müller", "Doe, Jane"} {
+		t.Run(name, func(t *testing.T) {
+			// Capture the real SMTP payload without advertising SMTPUTF8 support
+			server := newSMTPTestServer(t, "PLAIN")
+			connString := &url.URL{
+				Scheme: "smtp",
+				Host:   server.address(),
+				RawQuery: url.Values{
+					"fromAddress": {"sender@example.com"},
+					"fromName":    {name},
+					"tls":         {"none"},
+				}.Encode(),
+			}
+			var emailer SMTPEmailer
+			err := emailer.Init(t.Context(), internal.InitOpts{ConnString: connString})
+			require.NoError(t, err)
+			err = emailer.SendEmail(t.Context(), internal.EmailAddress{Name: name, Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
+			require.NoError(t, err)
+
+			// Display names belong only in headers while SMTP envelope addresses stay unchanged
+			session, err := server.wait()
+			require.NoError(t, err)
+			assert.Equal(t, "<sender@example.com>", session.mailFrom)
+			assert.Equal(t, "<recipient@example.com>", session.rcptTo)
+			message, err := mail.ReadMessage(strings.NewReader(session.message))
+			require.NoError(t, err)
+			for header, address := range map[string]string{"From": "sender@example.com", "To": "recipient@example.com"} {
+				value := message.Header.Get(header)
+				assert.NotRegexp(t, `[^\x00-\x7F]`, value, "%s must encode non-ASCII display names", header)
+				addresses, err := message.Header.AddressList(header)
+				require.NoError(t, err)
+				require.Len(t, addresses, 1)
+				assert.Equal(t, name, addresses[0].Name)
+				assert.Equal(t, address, addresses[0].Address)
+			}
+		})
+	}
 }

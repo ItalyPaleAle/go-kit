@@ -29,7 +29,7 @@ func TestInit(t *testing.T) {
 	assert.Equal(t, "key", emailer.accessKeyID)
 	assert.Equal(t, "secret", emailer.secretAccessKey)
 	assert.Equal(t, "eu-west-1", emailer.region)
-	assert.Equal(t, "Sender Name <sender@example.com>", emailer.from)
+	assert.Equal(t, "\"Sender Name\" <sender@example.com>", emailer.from)
 	assert.Equal(t, "https://email.eu-west-1.amazonaws.com", emailer.endpoint)
 	require.NotNil(t, emailer.now)
 }
@@ -68,7 +68,7 @@ func TestSendEmail(t *testing.T) {
 			return fmt.Errorf("destination has unexpected type: %#v", payload["Destination"])
 		}
 		// The recipient display name must be preserved in the RFC-822 formatted destination address
-		if !assert.ObjectsAreEqual([]any{"Recipient Name <recipient@example.com>"}, destination["ToAddresses"]) {
+		if !assert.ObjectsAreEqual([]any{"\"Recipient Name\" <recipient@example.com>"}, destination["ToAddresses"]) {
 			return fmt.Errorf("unexpected to addresses: %#v", destination["ToAddresses"])
 		}
 

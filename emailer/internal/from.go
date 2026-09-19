@@ -12,8 +12,8 @@ func FormatFromAddress(fromName string, fromAddress string) string {
 		return fromAddress
 	}
 
-	// Match the format already used across the emailer implementations so providers see a consistent From header
-	return fromName + " <" + fromAddress + ">"
+	// Encode non-ASCII display names and quote special characters so mail providers receive valid address headers
+	return (&mail.Address{Name: fromName, Address: fromAddress}).String()
 }
 
 // Format renders the address in the "Name <address>" form when a display name is set, or the bare address otherwise

@@ -2,6 +2,7 @@ package webhooktransport
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -39,22 +40,21 @@ func TestRefusesInternalIPsByDefault(t *testing.T) {
 }
 
 func TestAllowsInternalIPsWhenEnabled(t *testing.T) {
-	for _, tc := range internalAddresses {
-		t.Run(tc.name, func(t *testing.T) {
-			transport := New(Options{AllowPrivateIPs: true})
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			defer cancel()
+	// Listen on loopback so the test proves private connections are allowed without depending on external network state
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
 
-			// Nothing is listening on these addresses, so the dial still fails
-			// What matters is that it is not the SSRF guard turning it away
-			conn, err := transport.DialContext(ctx, "tcp", tc.address)
-			if conn != nil {
-				_ = conn.Close()
-			}
+	transport := New(Options{AllowPrivateIPs: true})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
 
-			require.Error(t, err)
-			require.NotContains(t, err.Error(), "refusing to dial private/internal IP")
-		})
+	conn, err := transport.DialContext(ctx, "tcp", listener.Addr().String())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	err = conn.Close()
+	if err != nil {
+		t.Logf("failed to close test connection: %v", err)
 	}
 }
 
