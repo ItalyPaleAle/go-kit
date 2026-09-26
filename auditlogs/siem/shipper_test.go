@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -767,6 +768,50 @@ func TestShipperRecordsMetrics(t *testing.T) {
 	// The lag is measured against the last event the shipper considered
 	// The exact value moves with the retry the fake clock steps through, so only the sign matters here
 	assert.Positive(t, got.lag)
+}
+
+func TestShipperRefreshesMetricsDuringAnOutage(t *testing.T) {
+	// The collector never accepts the batch, so the cursor stays put
+	// Lag and backlog must keep moving anyway, or they would hide the outage they are meant to reveal
+	collector := newTestCollector(t, slices.Repeat([]int{http.StatusServiceUnavailable}, 1000)...)
+	recorder := newRecordingMetrics()
+
+	// Event 1 was shipped before the outage started, 57 seconds before the fake clock's starting time
+	store := newFakeStore(seqEvent(1, "order.create"), seqEvent(2, "order.confirm"))
+	store.pos = seqEvent(1, "order.create").Position
+
+	s, clock := newTestShipper(t, store, collector.URL, func(o *ShipperOptions) {
+		o.Metrics = recorder
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	drained := make(chan error, 1)
+	go func() {
+		drained <- s.drain(ctx)
+	}()
+
+	// Insert another event once the first delivery has failed, then let the retries run
+	select {
+	case <-collector.received:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the shipper never contacted the collector")
+	}
+	store.add(seqEvent(3, "order.cancel"))
+	autoAdvance(t, clock)
+
+	// Every retry advances the clock by 10 minutes
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		got := recorder.snapshot()
+		assert.Equal(c, int64(2), got.backlog)
+		assert.Greater(c, got.lag, time.Hour.Seconds())
+	}, 10*time.Second, 10*time.Millisecond)
+
+	cancel()
+	err := <-drained
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int64(1), store.position().Seq)
 }
 
 func TestShipperToleratesNilMetrics(t *testing.T) {
