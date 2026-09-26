@@ -295,6 +295,29 @@ func TestApiError_Clone(t *testing.T) {
 		assert.Empty(t, original.InnerError)
 		assert.Nil(t, original.Metadata)
 	})
+
+	t.Run("preserves existing inner error and metadata", func(t *testing.T) {
+		original := NewApiError("ERROR", http.StatusBadRequest, "Validation error").Clone(
+			WithInnerError(errors.New("bad field")),
+			WithMetadata(map[string]string{"field": "email"}),
+		)
+		cloned := original.Clone()
+
+		assert.Equal(t, original, cloned)
+
+		// The metadata map is copied, so changing the clone's leaves the original untouched
+		cloned.Metadata["field"] = "name"
+		assert.Equal(t, "email", original.Metadata["field"])
+	})
+
+	t.Run("keeps earlier customizations when chaining", func(t *testing.T) {
+		cloned := NewApiError("ERROR", http.StatusInternalServerError, "Error occurred").
+			Clone(WithInnerError(errors.New("inner error"))).
+			Clone(WithMetadata(map[string]string{"key": "value"}))
+
+		assert.Equal(t, "inner error", cloned.InnerError)
+		assert.Equal(t, map[string]string{"key": "value"}, cloned.Metadata)
+	})
 }
 
 func TestWithInnerError(t *testing.T) {
