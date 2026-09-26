@@ -3,7 +3,8 @@
 This utility converts a Swagger 2.0 JSON document into OpenAPI 3 output.
 
 It writes both JSON and YAML outputs, validates the converted document, and can optionally filter paths by prefix.
-When path filtering is enabled, it also prunes unreferenced component schemas and unreferenced security schemes from the result.
+When path filtering is enabled, it also prunes the components (schemas, responses, parameters, and so on) that the kept paths don't reference, directly or through other components, and the security schemes that neither the kept operations nor the document-level security requirements use.
+The output is validated before it's written, so a failed run leaves existing output files untouched.
 
 Usage
 

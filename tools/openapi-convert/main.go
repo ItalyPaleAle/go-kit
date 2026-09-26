@@ -6,9 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi2"
@@ -83,6 +84,16 @@ func run(inPath, jsonPath, yamlPath, pathPrefix, title, description string) erro
 		}
 	}
 
+	// Validate the final document before writing anything, so a failure leaves existing outputs untouched
+	loaded, err := openapi3.NewLoader().LoadFromData(outJSON)
+	if err != nil {
+		return fmt.Errorf("reload openapi json: %w", err)
+	}
+	err = loaded.Validate(context.Background())
+	if err != nil {
+		return fmt.Errorf("validate output openapi json: %w", err)
+	}
+
 	outYAML, err := yaml.JSONToYAML(outJSON)
 	if err != nil {
 		return fmt.Errorf("encode openapi yaml: %w", err)
@@ -97,23 +108,16 @@ func run(inPath, jsonPath, yamlPath, pathPrefix, title, description string) erro
 		return err
 	}
 
-	loader := openapi3.NewLoader()
-	loaded, err := loader.LoadFromData(outJSON)
-	if err != nil {
-		return fmt.Errorf("reload openapi json: %w", err)
-	}
-	err = loaded.Validate(context.Background())
-	if err != nil {
-		return fmt.Errorf("validate written openapi json: %w", err)
-	}
-
 	return nil
 }
 
-// schemaRefRe matches $ref values pointing into #/components/schemas/
-var schemaRefRe = regexp.MustCompile(`"\$ref":\s*"#/components/schemas/([^"]+)"`)
+// componentRef identifies an entry in the document's components, such as a schema or a response
+type componentRef struct {
+	kind string
+	name string
+}
 
-// filterDoc returns a copy of docJSON with only paths that start with prefix, unreferenced component schemas pruned, unreferenced security schemes pruned, and info.title / info.description overridden when non-empty
+// filterDoc returns a copy of docJSON with only paths that start with prefix, unreferenced components and security schemes pruned, and info.title / info.description overridden when non-empty
 func filterDoc(docJSON []byte, prefix, title, description string) ([]byte, error) {
 	var doc map[string]any
 	err := json.Unmarshal(docJSON, &doc)
@@ -122,7 +126,8 @@ func filterDoc(docJSON []byte, prefix, title, description string) ([]byte, error
 	}
 
 	// Override info fields
-	if info, ok := doc["info"].(map[string]any); ok {
+	info, ok := doc["info"].(map[string]any)
+	if ok {
 		if title != "" {
 			info["title"] = title
 		}
@@ -141,21 +146,11 @@ func filterDoc(docJSON []byte, prefix, title, description string) ([]byte, error
 	}
 	doc["paths"] = filteredPaths
 
-	// Re-serialize so the ref scanners operate on the final path set
-	filteredJSON, err := json.Marshal(filteredPaths)
-	if err != nil {
-		return nil, fmt.Errorf("marshal filtered paths: %w", err)
-	}
-
-	// Collect all component schema names referenced by the kept paths, then expand transitively through the schemas themselves
+	// Prune the components that the kept paths don't use
 	components, _ := doc["components"].(map[string]any)
 	if components != nil {
-		err = pruneSchemas(components, filteredJSON)
-		if err != nil {
-			return nil, err
-		}
-
-		pruneSecuritySchemes(components, filteredPaths)
+		pruneComponents(components, filteredPaths)
+		pruneSecuritySchemes(components, filteredPaths, doc["security"])
 	}
 
 	result, err := json.MarshalIndent(doc, "", "  ")
@@ -167,64 +162,96 @@ func filterDoc(docJSON []byte, prefix, title, description string) ([]byte, error
 	return result, nil
 }
 
-// collectSchemaRefs returns the set of schema names referenced via $ref in src.
-func collectSchemaRefs(src []byte) map[string]bool {
-	refs := make(map[string]bool)
-	for _, match := range schemaRefRe.FindAllSubmatch(src, -1) {
-		refs[string(match[1])] = true
-	}
-	return refs
-}
+// pruneComponents removes the components that the kept paths don't reference, directly or through other components
+// References are followed across every component type: for example, a kept operation can reference a response, whose content references a schema
+// Security schemes are not referenced via $ref, so pruneSecuritySchemes handles them instead
+func pruneComponents(components map[string]any, filteredPaths map[string]any) {
+	// Seed the reachable set from the paths, then expand it transitively
+	reachable := make(map[componentRef]bool)
+	collectComponentRefs(filteredPaths, reachable)
 
-// pruneSchemas removes schemas from components that are not reachable from the paths JSON, resolving transitive references inside schemas themselves
-func pruneSchemas(components map[string]any, pathsJSON []byte) error {
-	schemas, _ := components["schemas"].(map[string]any)
-	if schemas == nil {
-		return nil
-	}
+	queue := slices.Collect(maps.Keys(reachable))
+	for len(queue) > 0 {
+		ref := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
 
-	// Seed the reachable set from the paths
-	reachable := collectSchemaRefs(pathsJSON)
-
-	// Expand transitively: any schema referenced by a reachable schema is also reachable
-	changed := true
-	for changed {
-		changed = false
-		for name := range reachable {
-			schema, ok := schemas[name]
-			if !ok {
-				continue
-			}
-			schemaJSON, err := json.Marshal(schema)
-			if err != nil {
-				return fmt.Errorf("marshal schema %s: %w", name, err)
-			}
-			for ref := range collectSchemaRefs(schemaJSON) {
-				if !reachable[ref] {
-					reachable[ref] = true
-					changed = true
-				}
+		entries, _ := components[ref.kind].(map[string]any)
+		found := make(map[componentRef]bool)
+		collectComponentRefs(entries[ref.name], found)
+		for r := range found {
+			if !reachable[r] {
+				reachable[r] = true
+				queue = append(queue, r)
 			}
 		}
 	}
 
-	for name := range schemas {
-		if !reachable[name] {
-			delete(schemas, name)
+	for kind, v := range components {
+		// Extensions are not component maps
+		if kind == "securitySchemes" || strings.HasPrefix(kind, "x-") {
+			continue
+		}
+
+		entries, _ := v.(map[string]any)
+		for name := range entries {
+			if !reachable[componentRef{kind: kind, name: name}] {
+				delete(entries, name)
+			}
 		}
 	}
-
-	return nil
 }
 
-// pruneSecuritySchemes removes security scheme entries that are not used by any operation in filteredPaths
-func pruneSecuritySchemes(components map[string]any, filteredPaths map[string]any) {
+// collectComponentRefs walks v recursively and adds every component referenced via $ref to refs
+func collectComponentRefs(v any, refs map[componentRef]bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		ref, _ := t["$ref"].(string)
+		kind, name, ok := parseComponentRef(ref)
+		if ok {
+			refs[componentRef{kind: kind, name: name}] = true
+		}
+
+		for _, val := range t {
+			collectComponentRefs(val, refs)
+		}
+	case []any:
+		for _, item := range t {
+			collectComponentRefs(item, refs)
+		}
+	}
+}
+
+// parseComponentRef returns the component type and name from a local reference such as "#/components/schemas/Name"
+// For a reference into a component, such as "#/components/schemas/Name/properties/id", it returns the component that contains it
+func parseComponentRef(ref string) (kind string, name string, ok bool) {
+	rest, ok := strings.CutPrefix(ref, "#/components/")
+	if !ok {
+		return "", "", false
+	}
+
+	kind, rest, _ = strings.Cut(rest, "/")
+	name, _, _ = strings.Cut(rest, "/")
+	if kind == "" || name == "" {
+		return "", "", false
+	}
+
+	// Reference tokens are JSON pointers, where "~1" stands for "/" and "~0" for "~"
+	name = strings.ReplaceAll(name, "~1", "/")
+	name = strings.ReplaceAll(name, "~0", "~")
+
+	return kind, name, true
+}
+
+// pruneSecuritySchemes removes security scheme entries that are not used by the document-level security requirements or by any operation in filteredPaths
+func pruneSecuritySchemes(components map[string]any, filteredPaths map[string]any, docSecurity any) {
 	secSchemes, _ := components["securitySchemes"].(map[string]any)
 	if secSchemes == nil {
 		return
 	}
 
+	// Operations without their own security requirements inherit the document-level ones, which stay in the output
 	used := make(map[string]bool)
+	collectUsedSecuritySchemes(map[string]any{"security": docSecurity}, used)
 	collectUsedSecuritySchemes(filteredPaths, used)
 
 	for name := range secSchemes {
