@@ -265,17 +265,17 @@ func pruneSecuritySchemes(components map[string]any, filteredPaths map[string]an
 func collectUsedSecuritySchemes(v any, used map[string]bool) {
 	switch t := v.(type) {
 	case map[string]any:
-		if sec, ok := t["security"]; ok {
-			if secArr, ok := sec.([]any); ok {
-				for _, entry := range secArr {
-					if entryMap, ok := entry.(map[string]any); ok {
-						for k := range entryMap {
-							used[k] = true
-						}
-					}
-				}
+		secArr, _ := t["security"].([]any)
+		for _, entry := range secArr {
+			entryMap, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			for k := range entryMap {
+				used[k] = true
 			}
 		}
+
 		for _, val := range t {
 			collectUsedSecuritySchemes(val, used)
 		}

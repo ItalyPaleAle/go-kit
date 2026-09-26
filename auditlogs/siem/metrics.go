@@ -11,6 +11,7 @@ type Metrics interface {
 	RecordBatch(outcome string)
 
 	// RecordLag records how many seconds elapsed between the creation of the last event the shipper considered and now
+	// While a batch is retried and the cursor has no event yet, as when it was bootstrapped against an empty table, it's measured from the oldest event in that batch instead
 	// This is the signal to alert on: it covers collector outages, misconfiguration and a stalled shipper goroutine at once
 	RecordLag(seconds float64)
 

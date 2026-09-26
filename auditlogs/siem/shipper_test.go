@@ -814,6 +814,36 @@ func TestShipperRefreshesMetricsDuringAnOutage(t *testing.T) {
 	assert.Equal(t, int64(1), store.position().Seq)
 }
 
+func TestShipperReportsLagWhenTheFirstBatchIsStuck(t *testing.T) {
+	// The cursor was bootstrapped against an empty table, so it has no event to measure the lag from
+	// If the very first batch never gets through, as with a collector misconfigured from the start, the lag must still grow
+	collector := newTestCollector(t, slices.Repeat([]int{http.StatusServiceUnavailable}, 1000)...)
+	recorder := newRecordingMetrics()
+	store := newFakeStore(seqEvent(1, "order.create"))
+
+	s, clock := newTestShipper(t, store, collector.URL, func(o *ShipperOptions) {
+		o.Metrics = recorder
+	})
+	autoAdvance(t, clock)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	drained := make(chan error, 1)
+	go func() {
+		drained <- s.drain(ctx)
+	}()
+
+	// Every retry advances the clock by 10 minutes
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Greater(c, recorder.snapshot().lag, time.Hour.Seconds())
+	}, 10*time.Second, 10*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-drained, context.Canceled)
+	assert.Equal(t, int64(0), store.position().Seq)
+}
+
 func TestShipperToleratesNilMetrics(t *testing.T) {
 	collector := newTestCollector(t)
 	store := newFakeStore(seqEvent(1, "order.confirm"))

@@ -433,7 +433,7 @@ func (s *Shipper) deliver(ctx context.Context, pos Position, events []Event) (er
 		// Encoding cannot fail on data that came out of the store, since metadata is normalized while stamping
 		// Treat it as a stall rather than a skip anyway: dropping an audit event is never the right recovery
 		s.log.ErrorContext(ctx, "Failed to encode an audit event batch", slog.Any("error", err))
-		err = s.waitAfterFailure(ctx, pos, jitter(backoffCap))
+		err = s.waitAfterFailure(ctx, pos, events[0].Position, jitter(backoffCap))
 		if err != nil {
 			return err
 		}
@@ -456,7 +456,7 @@ func (s *Shipper) deliver(ctx context.Context, pos Position, events []Event) (er
 			if !shrunk {
 				// The batch is already a single event, so re-reading would produce the same body
 				// Pause at the ceiling so a collector that refuses every event cannot turn into a hot loop
-				err = s.waitAfterFailure(ctx, pos, jitter(backoffCap))
+				err = s.waitAfterFailure(ctx, pos, events[0].Position, jitter(backoffCap))
 				if err != nil {
 					return err
 				}
@@ -477,7 +477,7 @@ func (s *Shipper) deliver(ctx context.Context, pos Position, events []Event) (er
 				slog.Duration("retryIn", delay),
 			)
 
-			err = s.waitAfterFailure(ctx, pos, delay)
+			err = s.waitAfterFailure(ctx, pos, events[0].Position, delay)
 			if err != nil {
 				return err
 			}
@@ -489,7 +489,7 @@ func (s *Shipper) deliver(ctx context.Context, pos Position, events []Event) (er
 			s.recordBatch(OutcomeFailed)
 			s.logStall(ctx, status, attempt, count)
 
-			err = s.waitAfterFailure(ctx, pos, jitter(backoffCap))
+			err = s.waitAfterFailure(ctx, pos, events[0].Position, jitter(backoffCap))
 			if err != nil {
 				return err
 			}
@@ -637,9 +637,17 @@ func (s *Shipper) retryDelay(attempt int, retryAfter time.Duration) time.Duratio
 
 // waitAfterFailure refreshes the lag and backlog gauges, then waits for d before the next attempt
 // The cursor doesn't advance while a batch is retried, so without the refresh the gauges would freeze at their values from before the failure, hiding the outage they are meant to reveal
-func (s *Shipper) waitAfterFailure(ctx context.Context, pos Position, d time.Duration) error {
+// oldest is the position of the first event in the batch being retried
+func (s *Shipper) waitAfterFailure(ctx context.Context, pos Position, oldest Position, d time.Duration) error {
 	s.sampleBacklog(ctx, pos)
-	s.reportLag(ctx, pos)
+
+	// A cursor that has never shipped anything has no event to measure the lag from, so it would report no lag for as long as the batch is stuck
+	// This is the case of a collector that is misconfigured from the start, so measure from the oldest event in the batch instead
+	lagFrom := pos
+	if lagFrom.EventCreatedAt <= 0 {
+		lagFrom = oldest
+	}
+	s.reportLag(ctx, lagFrom)
 
 	return s.wait(ctx, d)
 }
