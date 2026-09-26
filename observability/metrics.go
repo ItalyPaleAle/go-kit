@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
+	"go.opentelemetry.io/otel"
 	api "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/metric"
 
@@ -19,8 +20,8 @@ type InitMetricsOpts struct {
 	Prefix  string
 }
 
-// InitMetrics initializes metrics using OpenTelemetry.
-// The returned meter can be used to add additional metrics tracked by the applictaion.
+// InitMetrics initializes the meter provider using OpenTelemetry and sets it as the global one, which instrumentation libraries such as otelhttp use
+// The returned meter can be used to create the application's own metrics
 func InitMetrics(ctx context.Context, opts InitMetricsOpts) (meter api.Meter, shutdownFn func(ctx context.Context) error, err error) {
 	resource, err := opts.Config.GetOtelResource(opts.AppName)
 	if err != nil {
@@ -28,7 +29,7 @@ func InitMetrics(ctx context.Context, opts InitMetricsOpts) (meter api.Meter, sh
 	}
 
 	// Get the metric reader
-	// If the env var OTEL_METRICS_EXPORTER is empty, we set it to "none"
+	// autoexport defaults to OTLP when OTEL_METRICS_EXPORTER is empty, so set it to "none" to make exporting metrics opt-in
 	if os.Getenv("OTEL_METRICS_EXPORTER") == "" {
 		_ = os.Setenv("OTEL_METRICS_EXPORTER", "none") //nolint:errcheck
 	}
@@ -41,6 +42,7 @@ func InitMetrics(ctx context.Context, opts InitMetricsOpts) (meter api.Meter, sh
 		metric.WithResource(resource),
 		metric.WithReader(mr),
 	)
+	otel.SetMeterProvider(mp)
 	meter = mp.Meter(opts.Prefix)
 
 	return meter, mp.Shutdown, nil
