@@ -18,16 +18,15 @@ const (
 	minTLSVersion = tls.VersionTLS12
 )
 
-// Load a TLS configuration
-// First, checks if tlsKeyPEM and tlsCertPEM are valid TLS certificates
-// If not, tries to load from a path on disk files named "tls-cert.pem" and "tls-key.pem"
+// Load returns the TLS configuration for a server, or nil if TLS is disabled
+// If tlsCertPEM and tlsKeyPEM are both set, they're parsed as a PEM-encoded certificate and key
+// If both are empty, the certificate and key are loaded from the files "tls-cert.pem" and "tls-key.pem" in tlsPath, and the returned watchFn reloads them when they change
+// If only one of them is set, or tlsPath doesn't contain both files, TLS is disabled
 func Load(tlsPath string, tlsCertPEM string, tlsKeyPEM string) (tlsConfig *tls.Config, watchFn CertWatchFn, err error) {
 	tlsConfig = &tls.Config{
 		MinVersion: minTLSVersion,
 	}
 
-	// Let's set the server cert and key now
-	// First, check if we have actual keys
 	tlsCert := tlsCertPEM
 	tlsKey := tlsKeyPEM
 
@@ -83,8 +82,8 @@ type tlsCertProvider struct {
 	key     string
 }
 
-// Creates a new tlsCertProvider object
-// If we cannot find a TLS certificates, the returned object will be nil
+// newTLSCertProvider creates a new tlsCertProvider
+// If the certificate or key file doesn't exist, it returns nil
 func newTLSCertProvider(path string) (*tlsCertProvider, error) {
 	// Check if the certificate and key exist
 	cert := filepath.Join(path, tlsCertFile)
@@ -97,7 +96,7 @@ func newTLSCertProvider(path string) (*tlsCertProvider, error) {
 	key := filepath.Join(path, tlsKeyFile)
 	exists, err = utils.FileExists(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat TLS certificate key '%s': %w", tlsCertFile, err)
+		return nil, fmt.Errorf("failed to stat TLS certificate key '%s': %w", tlsKeyFile, err)
 	} else if !exists {
 		return nil, nil
 	}
@@ -116,7 +115,7 @@ func newTLSCertProvider(path string) (*tlsCertProvider, error) {
 	}, nil
 }
 
-// GetCertificateFn returns a function that can be used as the GetCertificate property in a tls.Config object.
+// GetCertificateFn returns a function that can be used as the GetCertificate property in a tls.Config object
 func (p *tlsCertProvider) GetCertificateFn() func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	return func(clientHello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		p.lock.RLock()
@@ -126,7 +125,8 @@ func (p *tlsCertProvider) GetCertificateFn() func(*tls.ClientHelloInfo) (*tls.Ce
 	}
 }
 
-// Reload the certificate from disk.
+// Reload loads the certificate from disk again
+// If that fails, the previous certificate stays in use
 func (p *tlsCertProvider) Reload() error {
 	tlsCert, err := tls.LoadX509KeyPair(p.cert, p.key)
 	if err != nil {
@@ -138,18 +138,26 @@ func (p *tlsCertProvider) Reload() error {
 	return nil
 }
 
-// SetTLSCert updates the TLS certificate object.
+// SetTLSCert updates the TLS certificate object
 func (p *tlsCertProvider) SetTLSCert(tlsCert *tls.Certificate) {
 	p.lock.Lock()
 	p.tlsCert = tlsCert
 	p.lock.Unlock()
 }
 
-// Watch starts watching (in background) for changes to the TLS certificate and key on disk, and triggers a reload when that happens.
+// Watch starts watching (in background) for changes to the TLS certificate and key on disk, and triggers a reload when that happens
 func (p *tlsCertProvider) Watch(ctx context.Context) error {
 	watcher, err := fsnotify.WatchFolder(ctx, p.path)
 	if err != nil {
 		return fmt.Errorf("failed to start watching for changes on disk: %w", err)
+	}
+
+	// The files may have changed after they were loaded and before the watcher was registered, which would not raise an event
+	// Reload once now: from here on, any change raises an event
+	// Files that are invalid at this point may be in the middle of a rotation, so this isn't fatal: the next change triggers another reload
+	err = p.Reload()
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to load updated TLS certificates from disk", slog.Any("error", err))
 	}
 
 	// Start the background watcher
@@ -158,11 +166,10 @@ func (p *tlsCertProvider) Watch(ctx context.Context) error {
 		for {
 			select {
 			case <-watcher:
-				// Reload
 				slog.InfoContext(ctx, "Found changes in folder containing TLS certificates; will reload certificates")
 				reloadErr = p.Reload()
 				if reloadErr != nil {
-					// Log errors only
+					// Keep serving the previous certificate until the next change
 					slog.ErrorContext(ctx, "Failed to load updated TLS certificates from disk", slog.Any("error", reloadErr))
 					continue
 				}

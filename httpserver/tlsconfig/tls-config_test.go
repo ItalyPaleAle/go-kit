@@ -217,6 +217,55 @@ func TestLoad_FromPath_WatchReloadsCertificates(t *testing.T) {
 	assert.Equal(t, updatedCert.Certificate[0], reloadedDER)
 }
 
+func TestLoad_FromPath_WatchPicksUpRotationBeforeWatching(t *testing.T) {
+	dir := t.TempDir()
+	initialCertPEM, initialKeyPEM := generateECDSACertPairPEM(t)
+	err := writeCertPairToDisk(dir, initialCertPEM, initialKeyPEM)
+	require.NoError(t, err)
+
+	tlsConfig, watchFn, err := Load(dir, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, tlsConfig)
+	require.NotNil(t, watchFn)
+
+	// Rotate the certificates after Load but before the watcher is started
+	updatedCertPEM, updatedKeyPEM := generateECDSACertPairPEM(t)
+	updatedCert, err := tls.X509KeyPair([]byte(updatedCertPEM), []byte(updatedKeyPEM))
+	require.NoError(t, err)
+	err = writeCertPairToDisk(dir, updatedCertPEM, updatedKeyPEM)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	err = watchFn(ctx)
+	require.NoError(t, err)
+
+	// The rotated certificate must be active as soon as watchFn returns, without another change on disk
+	assert.Equal(t, updatedCert.Certificate[0], currentLeafDER(t, tlsConfig))
+}
+
+func TestLoad_FromPath_WatchKeepsPreviousCertOnInvalidFilesBeforeWatching(t *testing.T) {
+	dir := t.TempDir()
+	initialCertPEM, initialKeyPEM := generateECDSACertPairPEM(t)
+	require.NoError(t, writeCertPairToDisk(dir, initialCertPEM, initialKeyPEM))
+
+	tlsConfig, watchFn, err := Load(dir, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, tlsConfig)
+	require.NotNil(t, watchFn)
+
+	initialDER := currentLeafDER(t, tlsConfig)
+
+	// Files can be invalid while they're being rotated, so this must not fail watchFn
+	require.NoError(t, writeCertPairToDisk(dir, "invalid cert", "invalid key"))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	require.NoError(t, watchFn(ctx))
+
+	assert.Equal(t, initialDER, currentLeafDER(t, tlsConfig))
+}
+
 func TestLoad_FromPath_WatchKeepsPreviousCertOnInvalidUpdate(t *testing.T) {
 	dir := t.TempDir()
 	initialCertPEM, initialKeyPEM := generateECDSACertPairPEM(t)
