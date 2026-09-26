@@ -406,3 +406,29 @@ func TestClose(t *testing.T) {
 
 	require.NoError(t, processor.Close())
 }
+
+func TestProcessorEmptyToActiveTransition(t *testing.T) {
+	// Each item is enqueued when the queue is empty and the processor loop is likely exiting
+	// Items must be executed without requiring another Enqueue to wake the processor up
+	clock := clocktesting.NewFakeClock(time.Now())
+	executeCh := make(chan *queueableItem, 1)
+	processor := NewProcessor(Options[string, *queueableItem]{
+		ExecuteFn: func(r *queueableItem) {
+			executeCh <- r
+		},
+		Clock: clock,
+	})
+	defer processor.Close()
+
+	for i := range 200_000 {
+		err := processor.Enqueue(newTestItem(i, clock.Now()))
+		require.NoError(t, err)
+
+		select {
+		case r := <-executeCh:
+			require.Equal(t, strconv.Itoa(i), r.Name)
+		case <-time.After(time.Second):
+			t.Fatalf("item %d was not executed", i)
+		}
+	}
+}
