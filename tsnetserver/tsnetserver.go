@@ -10,6 +10,7 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
@@ -41,9 +42,9 @@ type NewTSNetServerOpts struct {
 	// Note that even when using a store, tsnet still needs to write data in StateDir
 	Store ipn.StateStore
 
-	// Tags that should be applied to this node in the tailnet, for purposes of ACL enforcement.
-	// These can be referenced from the ACL policy document.
-	// Tags are generally required when a node is authenticated using OAuth2.
+	// Tags that should be applied to this node in the tailnet, for purposes of ACL enforcement
+	// These can be referenced from the ACL policy document
+	// Tags are generally required when a node is authenticated using OAuth2
 	AdvertiseTags []string
 
 	// Enables debug logging
@@ -71,10 +72,10 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 		}
 	}
 
-	// Bring up the Tailscale node, this will also give us the IP
-	state, err := tsrv.Up(ctx)
+	// Bring up the Tailscale node, which also gives us its IPs
+	state, err := bringUp(ctx, tsrv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to bring up Tailscale node: %w", err)
+		return nil, err
 	}
 
 	t := &TSNetServer{
@@ -94,6 +95,32 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 	}
 
 	return t, nil
+}
+
+// tsnetNode is the part of tsnet.Server that bringUp uses, so tests can replace it
+type tsnetNode interface {
+	Start() error
+	Up(ctx context.Context) (*ipnstate.Status, error)
+	Close() error
+}
+
+// bringUp starts the node and waits until it's running
+func bringUp(ctx context.Context, node tsnetNode) (*ipnstate.Status, error) {
+	// Up would start the node too, but starting it separately tells apart the two failures
+	// If starting fails, tsnet has already released what it allocated, and Close must not be called: it panics on a node that didn't finish starting
+	err := node.Start()
+	if err != nil {
+		return nil, fmt.Errorf("failed to start Tailscale node: %w", err)
+	}
+
+	state, err := node.Up(ctx)
+	if err != nil {
+		// Up can fail after the node started, for example when ctx is canceled while waiting for authentication
+		_ = node.Close()
+		return nil, fmt.Errorf("failed to bring up Tailscale node: %w", err)
+	}
+
+	return state, nil
 }
 
 func (t *TSNetServer) Hostname() string {
