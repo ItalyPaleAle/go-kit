@@ -152,6 +152,7 @@ func validateWebhookScheme(webhookUrl string) error {
 
 // SendWebhook sends the notification
 func (w *webhookClient) SendWebhook(ctx context.Context, data MessageProvider) (err error) {
+	// Retry up to 3 times
 	const attempts = 3
 	var i int
 retryLoop:

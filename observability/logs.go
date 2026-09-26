@@ -39,21 +39,21 @@ func GetLogLevel(level string) (slog.Level, error) {
 type InitLogsOpts struct {
 	// Log level: "debug", "info", "warn", "error", or an empty string (defaults to "info")
 	Level string
-	// If true, logs as JSON by default
+	// If true, logs as JSON instead of text
 	JSON bool
 
 	Config     kitconfig.Base
 	AppName    string
 	AppVersion string
 
-	// Writer for text and json logs
-	// If empty, defaults to stdout
+	// Writer for text and JSON logs
+	// If nil, defaults to stdout
 	Writer *os.File
 }
 
-// InitLogs initializes a new slog logger and configures it using OpenTelemetry if needed.
+// InitLogs initializes a new slog logger that also sends logs to OpenTelemetry, if an exporter is configured
+// Records below the configured level are dropped for both destinations
 func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdownFn func(ctx context.Context) error, err error) {
-	// Get the level
 	level, err := GetLogLevel(opts.Level)
 	if err != nil {
 		return nil, nil, err
@@ -87,7 +87,7 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 		return nil, nil, fmt.Errorf("failed to get OpenTelemetry resource: %w", err)
 	}
 
-	// If the env var OTEL_LOGS_EXPORTER is empty, we set it to "none"
+	// autoexport defaults to OTLP when OTEL_LOGS_EXPORTER is empty, so set it to "none" to make exporting logs opt-in
 	if os.Getenv("OTEL_LOGS_EXPORTER") == "" {
 		_ = os.Setenv("OTEL_LOGS_EXPORTER", "none") //nolint:errcheck
 	}
@@ -110,7 +110,10 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 	// Wrap the handler in a MultiHandler for fanout
 	handler = slog.NewMultiHandler(
 		handler,
-		otelslog.NewHandler(opts.AppName, otelslog.WithLoggerProvider(provider)),
+		levelHandler{
+			level:   level,
+			handler: otelslog.NewHandler(opts.AppName, otelslog.WithLoggerProvider(provider)),
+		},
 	)
 
 	// Return a function to invoke during shutdown
@@ -121,4 +124,32 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 		With(slog.String("version", opts.AppVersion))
 
 	return log, shutdownFn, nil
+}
+
+// levelHandler wraps a slog.Handler and drops records below a minimum level
+type levelHandler struct {
+	level   slog.Leveler
+	handler slog.Handler
+}
+
+func (h levelHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= h.level.Level() && h.handler.Enabled(ctx, level)
+}
+
+func (h levelHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.handler.Handle(ctx, r)
+}
+
+func (h levelHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return levelHandler{
+		level:   h.level,
+		handler: h.handler.WithAttrs(attrs),
+	}
+}
+
+func (h levelHandler) WithGroup(name string) slog.Handler {
+	return levelHandler{
+		level:   h.level,
+		handler: h.handler.WithGroup(name),
+	}
 }
