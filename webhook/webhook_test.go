@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,38 @@ func TestNewWebhook(t *testing.T) {
 
 		wh := whAny.(*webhookClient) //nolint:forcetypeassert
 		require.Equal(t, "https://discord.example.com/api/hooks/123/slack", wh.webhookURL)
+	})
+
+	t.Run("adds the slack suffix to the path of Discord webhooks with a query", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			url          string
+			expectedPath string
+		}{
+			{name: "without suffix", url: "https://discord.example.com/api/hooks/123/token?thread_id=456", expectedPath: "/api/hooks/123/token/slack"},
+			{name: "with suffix", url: "https://discord.example.com/api/hooks/123/token/slack?thread_id=456", expectedPath: "/api/hooks/123/token/slack"},
+			{name: "with trailing slash", url: "https://discord.example.com/api/hooks/123/token/?thread_id=456", expectedPath: "/api/hooks/123/token/slack"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				whAny, err := NewWebhook(NewWebhookOpts{URL: tc.url, Format: FormatDiscord})
+				require.NoError(t, err)
+
+				wh := whAny.(*webhookClient) //nolint:forcetypeassert
+				parsed, err := url.Parse(wh.webhookURL)
+				require.NoError(t, err)
+				require.Equal(t, tc.expectedPath, parsed.Path)
+				require.Equal(t, url.Values{"thread_id": []string{"456"}}, parsed.Query())
+			})
+		}
+	})
+
+	t.Run("rejects malformed Discord webhook URLs", func(t *testing.T) {
+		wh, err := NewWebhook(NewWebhookOpts{URL: "://bad url", Format: FormatDiscord})
+		require.Nil(t, wh)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "webhook URL validation failed")
 	})
 }
 

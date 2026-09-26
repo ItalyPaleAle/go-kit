@@ -87,9 +87,11 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		// All good
 	case FormatDiscord:
 		// Shorthand for using Slack-compatible webhooks with Discord
-		if !strings.HasSuffix(opts.URL, "/slack") {
-			opts.URL += "/slack"
+		discordURL, err := discordSlackURL(opts.URL)
+		if err != nil {
+			return nil, fmt.Errorf("webhook URL validation failed: %w", err)
 		}
+		opts.URL = discordURL
 	case "":
 		// Default to plain
 		opts.Format = FormatPlain
@@ -131,6 +133,20 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 	}
 
 	return w, nil
+}
+
+// discordSlackURL returns the Slack-compatible endpoint of a Discord webhook, which adds "/slack" to the path
+func discordSlackURL(webhookURL string) (string, error) {
+	parsed, err := url.Parse(webhookURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid webhook URL: %w", err)
+	}
+
+	if strings.HasSuffix(strings.TrimSuffix(parsed.Path, "/"), "/slack") {
+		return webhookURL, nil
+	}
+
+	return parsed.JoinPath("slack").String(), nil
 }
 
 // validateWebhookScheme checks that the webhook URL uses an allowed scheme (http/https)
