@@ -60,7 +60,7 @@ type ShipperOptions struct {
 	Key string
 
 	// AuthorizationHeader is the name of the header the Key is sent in
-	// SIEMs like Splunk HEC do not use Authorization and need this overwritten
+	// Set this for collectors that expect the key in a different header, such as Datadog (DD-API-KEY)
 	// Defaults to "Authorization"
 	AuthorizationHeader string
 
@@ -77,7 +77,7 @@ type ShipperOptions struct {
 	BatchSize int
 
 	// FlushInterval is how long the loop waits before polling again when there is nothing to send
-	// It must otherwise be between MinFlushInterval and MaxFlushInterval
+	// It must be between MinFlushInterval and MaxFlushInterval
 	// Defaults to DefaultFlushInterval
 	FlushInterval time.Duration
 
@@ -91,6 +91,7 @@ type ShipperOptions struct {
 	KnownEventTypes []string
 
 	// AllowPrivateIPs permits the collector to resolve to a private or otherwise non-routable address
+	// When this is false and a proxy is configured in the environment, the check applies to the proxy's address instead of the collector's, and a warning is logged
 	AllowPrivateIPs bool
 
 	// Metrics receives the shipper's observability signals
@@ -103,7 +104,7 @@ type ShipperOptions struct {
 	clock kclock.Clock
 }
 
-// Shipper reads settled audit events from a Store and POSTs them to a collector.
+// Shipper reads settled audit events from a Store and POSTs them to a collector
 type Shipper struct {
 	store      Store
 	client     *http.Client
@@ -201,6 +202,7 @@ func NewShipper(opts ShipperOptions) (*Shipper, error) {
 		},
 		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{
 			AllowPrivateIPs: opts.AllowPrivateIPs,
+			Logger:          opts.Logger,
 		})),
 	}
 
@@ -244,7 +246,7 @@ func validateURL(raw string) error {
 	}
 }
 
-// Nudge wakes the loop early so a freshly-written event does not have to wait out the flush interval
+// Nudge wakes the loop early so a freshly written event does not have to wait out the flush interval
 // It never blocks
 func (s *Shipper) Nudge() {
 	select {
@@ -265,12 +267,12 @@ func (s *Shipper) clearNudge() {
 
 // nudgeWindow is how long a nudge is held before reading
 func (s *Shipper) nudgeWindow() time.Duration {
-	// Ensure it's never less than the flush interval
+	// Never hold a nudge longer than the flush interval, or the nudge would delay shipping instead of speeding it up
 	return min(nudgeBatchWindow, s.flushInterval)
 }
 
 // Run ships events until ctx is canceled
-// One Shipper runs once: a second concurrent Run would race on the batch size and the failure counters, and would drive the Store from two goroutines at once
+// Call Run at most once per Shipper: a second concurrent Run would race on the batch size and the failure counters, and would drive the Store from two goroutines at once
 func (s *Shipper) Run(ctx context.Context) error {
 	s.log.InfoContext(ctx, "Audit log SIEM shipper started",
 		slog.String("url", s.url),
@@ -281,7 +283,7 @@ func (s *Shipper) Run(ctx context.Context) error {
 	defer s.log.InfoContext(ctx, "Audit log SIEM shipper stopped")
 
 	for {
-		// Clear any nudge that may be present
+		// The read below picks up whatever raised a pending nudge, so the nudge is no longer needed
 		s.clearNudge()
 
 		err := s.drain(ctx)
@@ -413,9 +415,9 @@ func (s *Shipper) applyFilter(events []Event) []Event {
 	return kept
 }
 
-// deliver POSTs a batch, retrying the same batch until it is accepted or ctx is canceled.
-// It returns errBatchTooLarge when the batch size has been reduced and the caller should re-read, and a context error when the shipper is shutting down.
-// It never returns after giving up on a batch: the cursor must not advance past an event the collector has not accepted.
+// deliver POSTs a batch, retrying the same batch until it is accepted or ctx is canceled
+// It returns errBatchTooLarge when the batch size has been reduced and the caller should re-read, and a context error when the shipper is shutting down
+// It never returns after giving up on a batch: the cursor must not advance past an event the collector has not accepted
 func (s *Shipper) deliver(ctx context.Context, events []Event) (err error) {
 	var (
 		body        []byte
@@ -549,8 +551,8 @@ func (s *Shipper) onSuccess(ctx context.Context, count int, attempt int) {
 	s.stalledSince = time.Time{}
 }
 
-// shrinkBatch halves the batch size, down to a floor of 1, and reports whether it could.
-// The size only ever shrinks: growing it back would rediscover the cap on every batch.
+// shrinkBatch halves the batch size, down to a floor of 1, and reports whether it could
+// The size only ever shrinks: growing it back would rediscover the cap on every batch
 func (s *Shipper) shrinkBatch(ctx context.Context, count int) bool {
 	if s.batchSize <= MinBatchSize {
 		s.log.ErrorContext(ctx, "The collector rejected a single audit event as too large, the feed is stalled",

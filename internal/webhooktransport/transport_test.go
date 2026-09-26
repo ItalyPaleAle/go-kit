@@ -1,8 +1,11 @@
 package webhooktransport
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -37,6 +40,51 @@ func TestRefusesInternalIPsByDefault(t *testing.T) {
 			require.ErrorContains(t, err, "refusing to dial private/internal IP")
 		})
 	}
+}
+
+func TestProxyWarning(t *testing.T) {
+	setProxyEnv := func(t *testing.T, name string, value string) {
+		for _, n := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+			t.Setenv(n, "")
+		}
+		if name != "" {
+			t.Setenv(name, value)
+		}
+	}
+
+	newWithLogs := func(opts Options) (*http.Transport, string) {
+		var buf bytes.Buffer
+		opts.Logger = slog.New(slog.NewTextHandler(&buf, nil))
+		transport := New(opts)
+		return transport, buf.String()
+	}
+
+	t.Run("warns when a proxy is set and private IPs are blocked", func(t *testing.T) {
+		setProxyEnv(t, "HTTPS_PROXY", "http://user:secret@proxy.example.com:3128")
+
+		transport, logs := newWithLogs(Options{})
+		require.NotNil(t, transport.Proxy)
+		require.Contains(t, logs, "level=WARN")
+		require.Contains(t, logs, "variable=HTTPS_PROXY")
+
+		// The value may contain credentials, so it must not be logged
+		require.NotContains(t, logs, "secret")
+	})
+
+	t.Run("no warning when private IPs are allowed", func(t *testing.T) {
+		setProxyEnv(t, "http_proxy", "http://proxy.example.com:3128")
+
+		transport, logs := newWithLogs(Options{AllowPrivateIPs: true})
+		require.NotNil(t, transport.Proxy)
+		require.Empty(t, logs)
+	})
+
+	t.Run("no warning without a proxy", func(t *testing.T) {
+		setProxyEnv(t, "", "")
+
+		_, logs := newWithLogs(Options{})
+		require.Empty(t, logs)
+	})
 }
 
 func TestAllowsInternalIPsWhenEnabled(t *testing.T) {

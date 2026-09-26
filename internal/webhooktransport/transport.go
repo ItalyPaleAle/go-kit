@@ -1,10 +1,12 @@
-// Package webhooktransport builds the HTTP transport shared by the packages that POST to an operator-configured endpoint.
+// Package webhooktransport builds the HTTP transport shared by the packages that POST to an operator-configured endpoint
 package webhooktransport
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"syscall"
 	"time"
 
@@ -13,18 +15,21 @@ import (
 
 // Options for New
 type Options struct {
-	// AllowPrivateIPs lifts the block on private and otherwise non-routable destinations.
-	// Leave it false for an endpoint that is expected to be on the public internet, such as a third-party chat webhook, where a private destination is a misconfiguration or an attack.
-	// Set it true only for an endpoint whose whole purpose is usually an internal host, such as a log collector, where blocking would make the feature unusable.
-	// Note: It has no effect on redirects: a caller that follows them can still be walked to a private address, so callers disable redirect following regardless of this option.
+	// AllowPrivateIPs lifts the block on private and otherwise non-routable destinations
+	// Leave it false for an endpoint that is expected to be on the public internet, such as a third-party chat webhook, where a private destination is a misconfiguration or an attack
+	// Set it true only for an endpoint whose whole purpose is usually an internal host, such as a log collector, where blocking would make the feature unusable
+	// Note: When a proxy is configured in the environment, the block applies to the proxy's address rather than the destination
 	AllowPrivateIPs bool
+
+	// Defaults to slog.Default()
+	Logger *slog.Logger
 }
 
-// New returns an http.Transport for posting to an operator-configured endpoint.
+// New returns an http.Transport for posting to an operator-configured endpoint
 //
-// Unless Options.AllowPrivateIPs is set, the dialer refuses to connect to private or otherwise non-routable addresses.
-// net.Dialer.Control is invoked AFTER the OS has resolved the hostname to an IP but BEFORE the connect syscall, which means:
-//  1. it sees the actual IP that would be connected to, so there is no TOCTOU window between the check and the connection
+// Unless Options.AllowPrivateIPs is set, the dialer refuses to connect to private or otherwise non-routable addresses
+// net.Dialer.Control runs after the hostname is resolved to an IP and before the connect syscall, which means:
+//  1. it sees the IP that is about to be connected to, so there is no TOCTOU window between the check and the connection
 //  2. it runs for every A/AAAA candidate in a multi-address result, so a mixed public/private DNS response cannot slip a private address through
 func New(opts Options) *http.Transport {
 	dialer := &net.Dialer{
@@ -34,6 +39,17 @@ func New(opts Options) *http.Transport {
 
 	if !opts.AllowPrivateIPs {
 		dialer.Control = controlBlockPrivateIPs
+
+		proxyEnv := proxyEnvVar()
+		if proxyEnv != "" {
+			log := opts.Logger
+			if log == nil {
+				log = slog.Default()
+			}
+
+			// Log the variable name only, as its value may contain credentials
+			log.Warn("A proxy is configured in the environment: the block on private addresses applies to the proxy instead of the destination", slog.String("variable", proxyEnv))
+		}
 	}
 
 	return &http.Transport{
@@ -45,6 +61,18 @@ func New(opts Options) *http.Transport {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+}
+
+// proxyEnvVar returns the name of the first environment variable that configures a proxy, or an empty string if there's none
+// These are the variables that http.ProxyFromEnvironment reads, in the same order of precedence
+func proxyEnvVar() string {
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		if os.Getenv(name) != "" {
+			return name
+		}
+	}
+
+	return ""
 }
 
 // controlBlockPrivateIPs is the net.Dialer.Control hook that refuses a connection to a non-routable address

@@ -56,7 +56,7 @@ type NewWebhookOpts struct {
 	// URL is the webhook endpoint (required)
 	URL string
 	// Key is the optional key for the webhook
-	// This is passed as-is in the Authorization header, so make sure to include amy prefix (like "Bearer" or "APIKey") if needed
+	// It is sent as-is in the authorization header, so include any prefix it needs (like "Bearer" or "APIKey")
 	Key string
 	// AuthorizationHeader is the name of the header that includes the authorization key
 	// This is ignored when format is "discord" or "slack"
@@ -104,7 +104,6 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		return nil, fmt.Errorf("webhook URL validation failed: %w", err)
 	}
 
-	// Set default logger
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -116,7 +115,7 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 			// Disable automatic redirect following to prevent SSRF via redirects to internal IPs
 			return http.ErrUseLastResponse
 		},
-		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{})),
+		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{Logger: opts.Logger})),
 	}
 
 	// Create the webhook client object
@@ -153,7 +152,6 @@ func validateWebhookScheme(webhookUrl string) error {
 
 // SendWebhook sends the notification
 func (w *webhookClient) SendWebhook(ctx context.Context, data MessageProvider) (err error) {
-	// Retry up to 3 times
 	const attempts = 3
 	var i int
 retryLoop:
@@ -195,7 +193,7 @@ retryLoop:
 				continue
 			}
 
-			// If we've exhausted the available attempts, break out of the loop right away
+			// No attempts left, so return the network error
 			break
 		}
 
@@ -207,7 +205,7 @@ retryLoop:
 
 		// Handle retries if we have more attempts
 		if i < (attempts - 1) {
-			// Handle throttling on 429 responses and on 5xx errors
+			// Handle throttling on 429 responses, honoring Retry-After up to a maximum
 			if res.StatusCode == http.StatusTooManyRequests {
 				retryAfter, _ := strconv.Atoi(res.Header.Get("Retry-After"))
 				if retryAfter < 1 {
