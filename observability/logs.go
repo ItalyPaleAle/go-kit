@@ -12,7 +12,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
-	logGlobal "go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel"
 	logSdk "go.opentelemetry.io/otel/sdk/log"
 
 	kitconfig "github.com/italypaleale/go-kit/config"
@@ -105,7 +105,7 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 	)
 
 	// Set the logger provider globally
-	logGlobal.SetLoggerProvider(provider)
+	otel.SetLoggerProvider(provider)
 
 	// Wrap the handler in a MultiHandler for fanout
 	handler = slog.NewMultiHandler(
