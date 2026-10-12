@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,13 +57,18 @@ func LoadConfig(dst Base, opts LoadConfigOpts) error {
 // Loads the configuration from a file and from the environment.
 // "dst" must be a pointer to a struct.
 func loadConfigFile(dst any, filePath string) error {
-	f, err := os.Open(filePath) //nolint:gosec
+	data, err := os.ReadFile(filePath) //nolint:gosec
 	if err != nil {
-		return fmt.Errorf("failed to open config file '%s': %w", filePath, err)
+		return fmt.Errorf("failed to read config file '%s': %w", filePath, err)
 	}
-	defer f.Close() //nolint:errcheck
 
-	yamlDec := yaml.NewDecoder(f)
+	// Replace values tagged with !file or !envfile with the contents of the files they reference
+	data, err = resolveFileRefs(data, filepath.Dir(filePath))
+	if err != nil {
+		return fmt.Errorf("failed to resolve file references in config file '%s': %w", filePath, err)
+	}
+
+	yamlDec := yaml.NewDecoder(bytes.NewReader(data))
 	yamlDec.KnownFields(true)
 	err = yamlDec.Decode(dst)
 	if err != nil {
