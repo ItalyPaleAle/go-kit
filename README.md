@@ -13,8 +13,11 @@ A collection of utility packages for Go applications.
 - **eventqueue**: A queue processor for delayed and scheduled events. Uses a binary heap for O(log N) operations, allowing you to enqueue items with a scheduled execution time and have them processed automatically when due.
 - **fsnotify**: Watches a filesystem folder for changes and batches notifications. Monitors for file create and write events, batching rapid changes within 500ms to avoid excessive notifications during bulk operations.
 - **httpserver**: Utilities for HTTP servers using the standard library. It includes a collection of middlewares and utilities for returning JSON-formatted responses and errors.
+- **httpserver/openapidoc**: Serves OpenAPI documents embedded in the binary as JSON, converting them to YAML when a client asks for that form.
 - **httpserver/tlsconfig**: Helpers for loading TLS certificates from PEM values or disk and hot-reloading them when certificate files change.
 - **iputils**: IP address helpers, including detection of private, loopback, link-local, and other non-routable addresses.
+- **oauth2/clientassertion**: Obtains client assertions for OAuth2 clients that authenticate with federated credentials instead of a client secret (RFC 7523), from Azure Managed Identity, Azure Workload Identity, Kubernetes service account tokens, or tsiam.
+- **objstore**: An object store abstraction over the local file system, S3 (and S3-compatible stores), and Vercel Blob, selected by a DSN.
 - **observability**: OpenTelemetry setup helpers for logs, metrics, and traces, with integration for the standard library's `log/slog` package.
 - **servicerunner**: Manages multiple background services running concurrently. Runs services in parallel goroutines and cancels all services if any one returns an error, collecting and returning all errors together.
 - **signals**: Graceful shutdown handling via OS signals. Returns a context that cancels on SIGINT or SIGTERM, with a second signal forcing immediate termination.
