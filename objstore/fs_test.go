@@ -141,9 +141,11 @@ func TestFSBackend(t *testing.T) {
 		_, err := backend.Put(t.Context(), "wf1.jpg", strings.NewReader("image"), 1024, "image/jpeg")
 		require.NoError(t, err)
 
-		require.NoError(t, backend.Delete(t.Context(), "wf1.jpg"))
+		err = backend.Delete(t.Context(), "wf1.jpg")
+		require.NoError(t, err)
 		assert.NoFileExists(t, filepath.Join(root, "wf1.jpg"))
-		require.NoError(t, backend.Delete(t.Context(), "wf1.jpg"))
+		err = backend.Delete(t.Context(), "wf1.jpg")
+		require.NoError(t, err)
 	})
 
 	t.Run("rejects a key that escapes the root folder", func(t *testing.T) {
@@ -155,7 +157,8 @@ func TestFSBackend(t *testing.T) {
 		_, _, err = backend.Get(t.Context(), "../escape.jpg")
 		require.Error(t, err)
 
-		require.Error(t, backend.Delete(t.Context(), "/absolute.jpg"))
+		err = backend.Delete(t.Context(), "/absolute.jpg")
+		require.Error(t, err)
 	})
 
 	t.Run("reports a canceled context", func(t *testing.T) {
@@ -173,7 +176,8 @@ func TestFSBackend(t *testing.T) {
 		_, err = backend.Exists(ctx, "wf1.jpg")
 		require.ErrorIs(t, err, context.Canceled)
 
-		require.ErrorIs(t, backend.Delete(ctx, "wf1.jpg"), context.Canceled)
+		err = backend.Delete(ctx, "wf1.jpg")
+		require.ErrorIs(t, err, context.Canceled)
 	})
 
 	t.Run("has no capability beyond storing objects", func(t *testing.T) {

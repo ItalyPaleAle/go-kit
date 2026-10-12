@@ -114,13 +114,15 @@ func TestDSNHasPublicAddressing(t *testing.T) {
 }
 
 func TestValidateKey(t *testing.T) {
-	require.NoError(t, ValidateKey("wf1/200x200.webp"))
-	require.NoError(t, ValidateKey("wf1.jpg"))
+	for _, key := range []string{"wf1/200x200.webp", "wf1.jpg"} {
+		err := ValidateKey(key)
+		require.NoError(t, err, key)
+	}
 
-	require.Error(t, ValidateKey(""))
-	require.Error(t, ValidateKey("/absolute/key"))
-	require.Error(t, ValidateKey("windows\\key"))
-	require.Error(t, ValidateKey("../escape"))
+	for _, key := range []string{"", "/absolute/key", "windows\\key", "../escape"} {
+		err := ValidateKey(key)
+		require.Error(t, err, key)
+	}
 }
 
 func TestPrefixedKey(t *testing.T) {

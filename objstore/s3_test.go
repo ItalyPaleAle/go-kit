@@ -254,7 +254,8 @@ func TestS3DeleteIsIdempotent(t *testing.T) {
 
 	backend := newTestS3Backend(t, server, s3Config{})
 
-	require.NoError(t, backend.Delete(t.Context(), "site/image.webp"))
+	err := backend.Delete(t.Context(), "site/image.webp")
+	require.NoError(t, err)
 }
 
 func TestS3CreateDirectUpload(t *testing.T) {

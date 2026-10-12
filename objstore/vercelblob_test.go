@@ -307,7 +307,8 @@ func TestVercelBlobCreateDirectUpload(t *testing.T) {
 	require.NoError(t, err)
 
 	var claims vercelClientTokenPayload
-	require.NoError(t, json.Unmarshal(payload, &claims))
+	err = json.Unmarshal(payload, &claims)
+	require.NoError(t, err)
 	assert.Equal(t, "images/wf1.jpg", claims.Pathname)
 	assert.Equal(t, int64(1024), claims.MaximumSizeInBytes)
 	assert.Equal(t, []string{"image/jpeg"}, claims.AllowedContentTypes)
@@ -337,7 +338,8 @@ func TestVercelBlobRejectsAnInvalidKey(t *testing.T) {
 	_, _, err = backend.Get(t.Context(), "../escape.jpg")
 	require.Error(t, err)
 
-	require.Error(t, backend.Delete(t.Context(), "../escape.jpg"))
+	err = backend.Delete(t.Context(), "../escape.jpg")
+	require.Error(t, err)
 }
 
 // Point a backend at a test server, which is what lets the requests it makes be inspected
