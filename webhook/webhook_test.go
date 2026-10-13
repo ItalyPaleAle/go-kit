@@ -120,7 +120,7 @@ func TestNewWebhook(t *testing.T) {
 		require.Equal(t, "https://hooks.example.com/endpoint", wh.webhookURL)
 		require.NotNil(t, wh.log)
 		require.NotNil(t, wh.httpClient)
-		require.Equal(t, webhookTimeout, wh.httpClient.Timeout)
+		require.Equal(t, defaultTimeout, wh.httpClient.Timeout)
 		require.NotNil(t, wh.httpClient.Transport)
 
 		req, err := http.NewRequest(http.MethodGet, "https://example.com/next", nil)
@@ -419,7 +419,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 3, defaultRetryInterval)
 
 		err := wh.SendWebhook(ctx, getWebhookData())
 		require.NoError(t, err)
@@ -469,7 +469,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 2, retryIntervalSeconds*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 2, defaultRetryInterval)
 
 		err := wh.SendWebhook(ctx, getWebhookData())
 		require.NoError(t, err)
@@ -493,7 +493,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 3, defaultRetryInterval)
 
 		err := wh.SendWebhook(ctx, getWebhookData())
 		require.Error(t, err)
@@ -518,7 +518,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 3, defaultRetryInterval)
 
 		err := wh.SendWebhook(ctx, getWebhookData())
 		require.Error(t, err)
@@ -540,7 +540,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 2, retryIntervalSeconds*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 2, defaultRetryInterval)
 
 		err := wh.SendWebhook(ctx, getWebhookData())
 		require.NoError(t, err)
