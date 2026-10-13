@@ -32,11 +32,7 @@ const (
 	defaultTimeout       = 20 * time.Second
 	defaultMaxAttempts   = 3
 	defaultRetryInterval = 20 * time.Second
-	// Delay between attempts after a network error when RetryInterval is not set
-	defaultNetworkRetryInterval = 15 * time.Second
-	maxRetryAfterSeconds        = 60
-	// Maximum number of redirects followed when FollowRedirects is enabled
-	maxRedirects = 5
+	maxRetryAfterSeconds = 60
 )
 
 // Webhook client interface
@@ -54,7 +50,6 @@ type webhookClient struct {
 	timeout           time.Duration
 	maxAttempts       int
 	retryInterval     time.Duration
-	networkRetryDelay time.Duration
 
 	log        *slog.Logger
 	httpClient *http.Client
@@ -87,8 +82,9 @@ type NewWebhookOpts struct {
 	// Must not be negative
 	MaxAttempts int
 	// RetryInterval is the delay between attempts
+	// It applies to every retried failure: network errors, and 408, 429 and 5xx responses
 	// For 429 responses, a valid "Retry-After" header (up to 60 seconds) takes precedence
-	// If zero, defaults to 20 seconds for 408, 429 and 5xx responses, and to 15 seconds for network errors
+	// If zero, defaults to 20 seconds
 	// Must not be negative
 	RetryInterval time.Duration
 	// AllowPrivateIPs allows sending the webhook to private and otherwise non-routable destinations, such as loopback, link-local, and RFC 1918 addresses
@@ -96,12 +92,6 @@ type NewWebhookOpts struct {
 	// Enable it only when the endpoint is expected to be on an internal network
 	// Note: When a proxy is configured in the environment, the block applies to the proxy's address rather than the destination
 	AllowPrivateIPs bool
-	// FollowRedirects makes the client follow redirects
-	// By default (false) redirects are not followed, and a redirect response is treated as an error
-	// When enabled, at most 5 redirects are followed, and only 307 and 308 responses, which preserve the method and body of the request: other redirect statuses would turn the POST into a GET and drop the message, so they are treated as an error
-	// The key is not sent to a different host (or when the scheme changes) on a redirect
-	// If AllowPrivateIPs is false, the block on private destinations applies to every hop
-	FollowRedirects bool
 
 	clock kclock.Clock
 }
@@ -164,16 +154,17 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		maxAttempts = defaultMaxAttempts
 	}
 	retryInterval := opts.RetryInterval
-	networkRetryDelay := opts.RetryInterval
 	if retryInterval == 0 {
 		retryInterval = defaultRetryInterval
-		networkRetryDelay = defaultNetworkRetryInterval
 	}
 
 	// Create the HTTP client
 	httpClient := &http.Client{
-		Timeout:       timeout,
-		CheckRedirect: checkRedirectFunc(opts),
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Do not follow redirects, to prevent SSRF via redirects to internal hosts
+			return http.ErrUseLastResponse
+		},
 		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{
 			AllowPrivateIPs: opts.AllowPrivateIPs,
 			Logger:          opts.Logger,
@@ -189,7 +180,6 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		timeout:           timeout,
 		maxAttempts:       maxAttempts,
 		retryInterval:     retryInterval,
-		networkRetryDelay: networkRetryDelay,
 
 		log:        opts.Logger,
 		httpClient: httpClient,
@@ -197,41 +187,6 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 	}
 
 	return w, nil
-}
-
-// checkRedirectFunc returns the redirect policy for the HTTP client
-func checkRedirectFunc(opts NewWebhookOpts) func(req *http.Request, via []*http.Request) error {
-	if !opts.FollowRedirects {
-		return func(req *http.Request, via []*http.Request) error {
-			// Do not follow redirects, to prevent SSRF via redirects to internal hosts
-			return http.ErrUseLastResponse
-		}
-	}
-
-	authHeader := opts.AuthorizationHeader
-	return func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return fmt.Errorf("stopped after %d redirects", maxRedirects)
-		}
-
-		// Only 307 and 308 preserve the method and body
-		// For the other statuses the response is returned as-is, and it's reported as an error
-		if req.Response != nil && req.Response.StatusCode != http.StatusTemporaryRedirect && req.Response.StatusCode != http.StatusPermanentRedirect {
-			return http.ErrUseLastResponse
-		}
-
-		// Do not leak the key to a different host, or in clear text after a downgrade
-		// The http.Client already strips "Authorization" in some cases, but not a custom header name
-		origin := via[0].URL
-		if req.URL.Host != origin.Host || req.URL.Scheme != origin.Scheme {
-			req.Header.Del("Authorization")
-			if authHeader != "" {
-				req.Header.Del(authHeader)
-			}
-		}
-
-		return nil
-	}
 }
 
 // discordSlackURL returns the Slack-compatible endpoint of a Discord webhook, which adds "/slack" to the path
@@ -267,10 +222,9 @@ func validateWebhookScheme(webhookUrl string) error {
 
 // SendWebhook sends the notification
 func (w *webhookClient) SendWebhook(ctx context.Context, data MessageProvider) (err error) {
-	attempts := w.maxAttempts
 	var i int
 retryLoop:
-	for i = range attempts {
+	for i = range w.maxAttempts {
 		var req *http.Request
 		reqCtx, reqCancel := context.WithTimeout(ctx, w.timeout)
 		switch w.format {
@@ -293,14 +247,14 @@ retryLoop:
 		if err != nil {
 			reqCancel()
 			// Retry after a delay on network failures, if we have more attempts
-			if i < (attempts - 1) {
+			if i < (w.maxAttempts - 1) {
 				w.log.WarnContext(ctx,
 					"Network error sending webhook; will retry after delay",
 					slog.Any("error", err),
-					slog.Duration("delay", w.networkRetryDelay),
+					slog.Duration("delay", w.retryInterval),
 				)
 				select {
-				case <-w.clock.After(w.networkRetryDelay):
+				case <-w.clock.After(w.retryInterval):
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
@@ -320,7 +274,7 @@ retryLoop:
 		reqCancel()
 
 		// Handle retries if we have more attempts
-		if i < (attempts - 1) {
+		if i < (w.maxAttempts - 1) {
 			// Handle throttling on 429 responses, honoring Retry-After up to a maximum
 			if res.StatusCode == http.StatusTooManyRequests {
 				retryAfter := w.retryInterval
