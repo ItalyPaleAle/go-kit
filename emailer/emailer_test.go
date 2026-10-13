@@ -3,6 +3,7 @@ package emailer
 import (
 	"testing"
 
+	"github.com/italypaleale/go-kit/emailer/resend"
 	smtpemailer "github.com/italypaleale/go-kit/emailer/smtp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,5 +18,15 @@ func TestNewEmailerSMTP(t *testing.T) {
 
 	// A successful construction proves the parsed connection string reached the SMTP initializer
 	_, ok := emailer.(*smtpemailer.SMTPEmailer)
+	assert.True(t, ok)
+}
+
+func TestNewEmailerResend(t *testing.T) {
+	emailer, err := NewEmailer(t.Context(), NewEmailerOpts{
+		ConnString: "resend://re_key?fromAddress=sender@example.com&fromName=Sender+Name",
+	})
+	require.NoError(t, err)
+
+	_, ok := emailer.(*resend.ResendEmailer)
 	assert.True(t, ok)
 }
