@@ -253,15 +253,6 @@ func TestSendEmailAPIErrors(t *testing.T) {
 	}
 }
 
-func TestSendEmailRedactsKeyEchoedByServer(t *testing.T) {
-	server, _ := newTestServer(t, http.StatusUnauthorized, `{"name":"invalid_api_key","message":"API key `+testAPIKey+` is invalid"}`, nil)
-	e := newTestEmailer(server)
-
-	err := e.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{Text: "Body"})
-	require.ErrorContains(t, err, "[redacted]")
-	assert.NotContains(t, err.Error(), testAPIKey)
-}
-
 func TestSendEmailDoesNotFollowRedirects(t *testing.T) {
 	// The target would receive the Authorization header if the redirect were followed
 	targetHit := make(chan struct{}, 1)

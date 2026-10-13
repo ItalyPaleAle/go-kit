@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -137,26 +136,18 @@ func (r *ResendEmailer) responseError(resp *http.Response) error {
 	err := json.Unmarshal(respBody, &apiErr)
 	if err == nil && apiErr.Message != "" {
 		if apiErr.Name != "" {
-			return r.redact(fmt.Sprintf("failed to send email (%d): %s: %s", resp.StatusCode, apiErr.Name, apiErr.Message))
+			return fmt.Errorf("failed to send email (%d): %s: %s", resp.StatusCode, apiErr.Name, apiErr.Message)
 		}
-		return r.redact(fmt.Sprintf("failed to send email (%d): %s", resp.StatusCode, apiErr.Message))
+		return fmt.Errorf("failed to send email (%d): %s", resp.StatusCode, apiErr.Message)
 	}
 
 	// Rate limited responses may carry a hint on when to retry
 	retryAfter := resp.Header.Get("Retry-After")
 	if resp.StatusCode == http.StatusTooManyRequests && retryAfter != "" {
-		return r.redact(fmt.Sprintf("failed to send email (%d): rate limit exceeded, retry after %s seconds", resp.StatusCode, retryAfter))
+		return fmt.Errorf("failed to send email (%d): rate limit exceeded, retry after %s seconds", resp.StatusCode, retryAfter)
 	}
 
-	return r.redact(fmt.Sprintf("failed to send email (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody))))
-}
-
-// redact returns an error for msg with the API key removed, as a safeguard in case a server echoes it back
-func (r *ResendEmailer) redact(msg string) error {
-	if r.apiKey != "" {
-		msg = strings.ReplaceAll(msg, r.apiKey, "[redacted]")
-	}
-	return errors.New(msg)
+	return fmt.Errorf("failed to send email (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 }
 
 // resendMessage is the request body of the send email endpoint
