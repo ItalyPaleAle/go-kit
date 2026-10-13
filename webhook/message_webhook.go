@@ -6,6 +6,8 @@ type MessageProvider interface {
 	GetPlainMessage() (string, error)
 	// GetSlackMessage must return the message for the webhook in Slack-compatible format
 	GetSlackMessage() (SlackMessage, error)
+	// GetNtfyMessage must return the message for the webhook in ntfy format
+	GetNtfyMessage() (NtfyMessage, error)
 }
 
 // SlackMessage is the type for a Slack-compatible message
@@ -23,5 +25,11 @@ func (s StringMessage) GetPlainMessage() (string, error) {
 func (s StringMessage) GetSlackMessage() (SlackMessage, error) {
 	return SlackMessage{
 		Text: string(s),
+	}, nil
+}
+
+func (s StringMessage) GetNtfyMessage() (NtfyMessage, error) {
+	return NtfyMessage{
+		Message: string(s),
 	}, nil
 }
