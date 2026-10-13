@@ -77,8 +77,9 @@ type NewWebhookOpts struct {
 	// Must not be negative
 	Timeout time.Duration
 	// MaxAttempts is the maximum number of times a request is sent, including the first attempt
-	// Network errors, 408, 429 and 5xx responses are retried; other errors are permanent
-	// If zero, defaults to 3; set it to 1 to disable retries
+	// Network errors, 408, 429 and 5xx responses are retried, while other errors are permanent
+	// If zero, defaults to 3
+	// Set it to 1 to disable retries
 	// Must not be negative
 	MaxAttempts int
 	// RetryInterval is the delay between attempts
@@ -88,7 +89,6 @@ type NewWebhookOpts struct {
 	// Must not be negative
 	RetryInterval time.Duration
 	// AllowPrivateIPs allows sending the webhook to private and otherwise non-routable destinations, such as loopback, link-local, and RFC 1918 addresses
-	// By default (false) these are refused when connecting, which protects against SSRF
 	// Enable it only when the endpoint is expected to be on an internal network
 	// Note: When a proxy is configured in the environment, the block applies to the proxy's address rather than the destination
 	AllowPrivateIPs bool

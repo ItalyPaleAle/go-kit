@@ -771,7 +771,9 @@ func TestWebhookRetryOptions(t *testing.T) {
 			reqCh <- r
 			return res, err
 		})
-		return wh, clock, reqCh, func() int { return int(counter.Load()) }
+		return wh, clock, reqCh, func() int {
+			return int(counter.Load())
+		}
 	}
 
 	t.Run("max attempts of 1 disables retries", func(t *testing.T) {
