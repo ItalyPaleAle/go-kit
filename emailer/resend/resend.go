@@ -113,7 +113,6 @@ func (r *ResendEmailer) SendEmail(ctx context.Context, to internal.EmailAddress,
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// The key only travels in a header, which url.Error does not include, so the error is safe to wrap as-is
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
