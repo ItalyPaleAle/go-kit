@@ -10,6 +10,7 @@ import (
 	"github.com/italypaleale/go-kit/emailer/awsses"
 	"github.com/italypaleale/go-kit/emailer/console"
 	"github.com/italypaleale/go-kit/emailer/internal"
+	"github.com/italypaleale/go-kit/emailer/resend"
 	"github.com/italypaleale/go-kit/emailer/sendgrid"
 	"github.com/italypaleale/go-kit/emailer/smtp"
 )
@@ -53,6 +54,8 @@ func NewEmailer(ctx context.Context, opts NewEmailerOpts) (Emailer, error) {
 	switch connString.Scheme {
 	case "awsses":
 		e = &awsses.AWSSES{}
+	case "resend":
+		e = &resend.ResendEmailer{}
 	case "sendgrid":
 		e = &sendgrid.SendGridEmailer{}
 	case "smtp":
