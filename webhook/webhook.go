@@ -26,6 +26,7 @@ const (
 	FormatSlack   WebhookFormat = "slack"
 	FormatDiscord WebhookFormat = "discord"
 	FormatPlain   WebhookFormat = "plain"
+	FormatNtfy    WebhookFormat = "ntfy"
 )
 
 const (
@@ -108,7 +109,7 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		return nil, errors.New("webhook URL is required")
 	}
 	switch opts.Format {
-	case FormatSlack, FormatPlain:
+	case FormatSlack, FormatPlain, FormatNtfy:
 		// All good
 	case FormatDiscord:
 		// Shorthand for using Slack-compatible webhooks with Discord
@@ -232,6 +233,8 @@ retryLoop:
 			req, err = w.prepareSlackRequest(reqCtx, w.webhookURL, data)
 		case "discord":
 			req, err = w.prepareSlackRequest(reqCtx, w.webhookURL, data)
+		case FormatNtfy:
+			req, err = w.prepareNtfyRequest(reqCtx, w.webhookURL, data)
 		// case "plain":
 		default:
 			req, err = w.preparePlainRequest(reqCtx, w.webhookURL, data)
@@ -345,19 +348,26 @@ func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl stri
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Set("Content-Type", "text/plain")
-
-	if w.webhookKey != "" {
-		// Get header name, defaults to "Authorization"
-		headerName := w.webhookAuthHeader
-		if headerName == "" {
-			headerName = "Authorization"
-		}
-
-		req.Header.Set(headerName, w.webhookKey)
-	}
+	w.setAuthHeader(req)
 
 	return req, nil
+}
+
+// setAuthHeader adds the key to the request, if there's one
+func (w *webhookClient) setAuthHeader(req *http.Request) {
+	if w.webhookKey == "" {
+		return
+	}
+
+	// Get header name, defaults to "Authorization"
+	headerName := w.webhookAuthHeader
+	if headerName == "" {
+		headerName = "Authorization"
+	}
+
+	req.Header.Set(headerName, w.webhookKey)
 }
 
 func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
@@ -390,6 +400,39 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 	if w.webhookKey != "" {
 		req.Header.Set("Authorization", w.webhookKey)
 	}
+
+	return req, nil
+}
+
+// prepareNtfyRequest prepares a request to publish to an ntfy topic (https://docs.ntfy.sh/publish/)
+// The URL must include the topic, such as "https://ntfy.sh/mytopic"
+// To publish to a protected topic, set Key to the full value of the authorization header, such as "Bearer tk_..." for an access token
+func (w *webhookClient) prepareNtfyRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
+	// Format the message
+	message, err := data.GetNtfyMessage()
+	if err != nil {
+		return nil, fmt.Errorf("error getting ntfy message: %w", err)
+	}
+
+	// Build the headers first, so an invalid message does not create a request
+	headers, err := message.headers()
+	if err != nil {
+		return nil, fmt.Errorf("invalid ntfy message: %w", err)
+	}
+
+	// Create the request
+	// The message is the body, and the other fields are sent as headers
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookUrl, strings.NewReader(message.Message))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	w.setAuthHeader(req)
 
 	return req, nil
 }

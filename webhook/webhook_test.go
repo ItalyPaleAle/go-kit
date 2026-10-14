@@ -24,8 +24,10 @@ import (
 type testMessageProvider struct {
 	message      string
 	slackMessage SlackMessage
+	ntfyMessage  NtfyMessage
 	plainErr     error
 	slackErr     error
+	ntfyErr      error
 }
 
 func (tmp testMessageProvider) GetPlainMessage() (string, error) {
@@ -44,6 +46,18 @@ func (tmp testMessageProvider) GetSlackMessage() (SlackMessage, error) {
 	}
 	return SlackMessage{
 		Text: tmp.message,
+	}, nil
+}
+
+func (tmp testMessageProvider) GetNtfyMessage() (NtfyMessage, error) {
+	if tmp.ntfyErr != nil {
+		return NtfyMessage{}, tmp.ntfyErr
+	}
+	if tmp.ntfyMessage.Message != "" || tmp.ntfyMessage.Title != "" {
+		return tmp.ntfyMessage, nil
+	}
+	return NtfyMessage{
+		Message: tmp.message,
 	}, nil
 }
 
