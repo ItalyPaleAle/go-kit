@@ -26,10 +26,7 @@ const (
 	FormatSlack   WebhookFormat = "slack"
 	FormatDiscord WebhookFormat = "discord"
 	FormatPlain   WebhookFormat = "plain"
-	// FormatNtfy publishes to an ntfy topic (https://docs.ntfy.sh/publish/)
-	// The URL must include the topic, such as "https://ntfy.sh/mytopic"
-	// To publish to a protected topic, set Key to the full value of the authorization header, such as "Bearer tk_..." for an access token
-	FormatNtfy WebhookFormat = "ntfy"
+	FormatNtfy    WebhookFormat = "ntfy"
 )
 
 const (
@@ -351,6 +348,7 @@ func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl stri
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Set("Content-Type", "text/plain")
 	w.setAuthHeader(req)
 
@@ -406,6 +404,9 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 	return req, nil
 }
 
+// prepareNtfyRequest prepares a request to publish to an ntfy topic (https://docs.ntfy.sh/publish/)
+// The URL must include the topic, such as "https://ntfy.sh/mytopic"
+// To publish to a protected topic, set Key to the full value of the authorization header, such as "Bearer tk_..." for an access token
 func (w *webhookClient) prepareNtfyRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
 	// Format the message
 	message, err := data.GetNtfyMessage()
@@ -425,10 +426,12 @@ func (w *webhookClient) prepareNtfyRequest(ctx context.Context, webhookUrl strin
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+
 	w.setAuthHeader(req)
 
 	return req, nil

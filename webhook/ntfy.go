@@ -31,7 +31,6 @@ type NtfyMessage struct {
 	// If empty, ntfy uses a default text
 	Message string
 	// Title is the optional title of the notification
-	// Non-ASCII characters are supported, and control characters (including line breaks) are replaced with spaces
 	Title string
 	// Priority is the optional priority of the notification, from NtfyPriorityMin (1) to NtfyPriorityMax (5)
 	// If zero, the server default is used
@@ -70,10 +69,12 @@ func (m NtfyMessage) headers() (map[string]string, error) {
 		if strings.Contains(tag, ",") {
 			return nil, fmt.Errorf("invalid tag %q: must not contain commas", tag)
 		}
+
 		tag = sanitizeNtfyHeader(tag)
 		if tag == "" {
 			continue
 		}
+
 		tags = append(tags, encodeNtfyHeader(tag))
 	}
 	if len(tags) > 0 {
@@ -108,6 +109,7 @@ func sanitizeNtfyHeader(val string) string {
 		}
 		return r
 	}, val)
+
 	return strings.TrimSpace(val)
 }
 
