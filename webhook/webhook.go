@@ -125,9 +125,9 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		return nil, fmt.Errorf("invalid webhook format: %q", opts.Format)
 	}
 
-	// Validate the webhook URL scheme
+	// Validate the webhook URL (scheme, host, and the topic for ntfy)
 	// The custom net.Dialer.Control on the HTTP transport enforces the private-IP block at connect time
-	err := validateWebhookScheme(opts.URL)
+	err := validateWebhookURL(opts.URL, opts.Format)
 	if err != nil {
 		return nil, fmt.Errorf("webhook URL validation failed: %w", err)
 	}
@@ -204,8 +204,10 @@ func discordSlackURL(webhookURL string) (string, error) {
 	return parsed.JoinPath("slack").String(), nil
 }
 
-// validateWebhookScheme checks that the webhook URL uses an allowed scheme (http/https)
-func validateWebhookScheme(webhookUrl string) error {
+// validateWebhookURL checks that the webhook URL uses an allowed scheme (http/https) and has a host
+// For the ntfy format, it also checks that the path includes the topic
+// Error messages never include the URL, as it commonly contains secrets
+func validateWebhookURL(webhookUrl string, format WebhookFormat) error {
 	parsed, err := url.Parse(webhookUrl)
 	if err != nil {
 		return fmt.Errorf("invalid webhook URL: %w", err)
@@ -215,10 +217,21 @@ func validateWebhookScheme(webhookUrl string) error {
 	switch parsed.Scheme {
 	case "http", "https":
 		// OK
-		return nil
 	default:
 		return fmt.Errorf("webhook URL has disallowed scheme %q: only http and https are permitted", parsed.Scheme)
 	}
+
+	// URLs like "https:///path" and "https:path" parse without errors but have no host
+	if parsed.Hostname() == "" {
+		return errors.New("webhook URL must include a host")
+	}
+
+	// ntfy publishes to the topic named in the path, such as "https://ntfy.sh/mytopic"
+	if format == FormatNtfy && strings.Trim(parsed.Path, "/") == "" {
+		return errors.New("ntfy webhook URL must include the topic in the path")
+	}
+
+	return nil
 }
 
 // SendWebhook sends the notification
