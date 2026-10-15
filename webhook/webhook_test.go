@@ -741,6 +741,60 @@ func TestNewWebhookOptionsValidation(t *testing.T) {
 	}
 }
 
+func TestNewWebhookURLValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		url    string
+		format WebhookFormat
+		// Empty when the URL must be accepted
+		expectErr string
+	}{
+		// Host
+		{name: "plain without host", url: "https:///x", format: FormatPlain, expectErr: "must include a host"},
+		{name: "plain with opaque URL", url: "https:x", format: FormatPlain, expectErr: "must include a host"},
+		{name: "default format without host", url: "https:///x", expectErr: "must include a host"},
+		{name: "slack without host", url: "https:///x", format: FormatSlack, expectErr: "must include a host"},
+		{name: "discord without host", url: "https:///x", format: FormatDiscord, expectErr: "must include a host"},
+		{name: "ntfy without host", url: "https:///x", format: FormatNtfy, expectErr: "must include a host"},
+		{name: "ntfy with opaque URL", url: "https:x", format: FormatNtfy, expectErr: "must include a host"},
+
+		// ntfy topic
+		{name: "ntfy without path", url: "https://ntfy.example.com", format: FormatNtfy, expectErr: "must include the topic"},
+		{name: "ntfy with root path", url: "https://ntfy.example.com/", format: FormatNtfy, expectErr: "must include the topic"},
+		{name: "ntfy with only slashes", url: "https://ntfy.example.com//", format: FormatNtfy, expectErr: "must include the topic"},
+		{name: "ntfy with only a query", url: "https://ntfy.example.com/?auth=x", format: FormatNtfy, expectErr: "must include the topic"},
+		{name: "ntfy with topic", url: "https://ntfy.example.com/ddup", format: FormatNtfy},
+		{name: "ntfy with topic and trailing slash", url: "https://ntfy.example.com/ddup/", format: FormatNtfy},
+		{name: "ntfy with path prefix and topic", url: "https://ntfy.example.com/prefix/topic", format: FormatNtfy},
+		{name: "ntfy with port and topic", url: "http://ntfy.example.com:8080/ddup", format: FormatNtfy},
+
+		// Other formats do not need a path
+		{name: "plain without path", url: "https://hooks.example.com", format: FormatPlain},
+		{name: "default format without path", url: "https://hooks.example.com"},
+		{name: "slack without path", url: "https://hooks.example.com", format: FormatSlack},
+		{name: "discord without path", url: "https://discord.example.com", format: FormatDiscord},
+		{name: "plain with path", url: "https://hooks.example.com/endpoint", format: FormatPlain},
+		{name: "slack with path", url: "https://hooks.example.com/services/a/b", format: FormatSlack},
+		{name: "discord with path", url: "https://discord.example.com/api/hooks/123/token", format: FormatDiscord},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wh, err := NewWebhook(NewWebhookOpts{URL: tc.url, Format: tc.format})
+			if tc.expectErr == "" {
+				require.NoError(t, err)
+				require.NotNil(t, wh)
+				return
+			}
+
+			require.Nil(t, wh)
+			require.ErrorContains(t, err, "webhook URL validation failed")
+			require.ErrorContains(t, err, tc.expectErr)
+			// URLs commonly contain secrets, so they must not appear in the error
+			require.NotContains(t, err.Error(), tc.url)
+		})
+	}
+}
+
 func TestNewWebhookOptionsDefaults(t *testing.T) {
 	// The zero value of every option must keep the behavior from before the options existed
 	whAny, err := NewWebhook(NewWebhookOpts{URL: "https://hooks.example.com/endpoint"})
