@@ -2,56 +2,12 @@ package webhook
 
 import (
 	"errors"
-	"io"
 	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type telegramTestRequest struct {
-	method   string
-	path     string
-	rawQuery string
-	header   http.Header
-	body     string
-}
-
-// Starts a server that records the requests it receives, and replies with the given status code and body
-func newTelegramTestServer(t *testing.T, statusCode int, resBody string) (srv *httptest.Server, requests func() []telegramTestRequest) {
-	t.Helper()
-
-	var (
-		mu   sync.Mutex
-		reqs []telegramTestRequest
-	)
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		reqs = append(reqs, telegramTestRequest{
-			method:   r.Method,
-			path:     r.URL.Path,
-			rawQuery: r.URL.RawQuery,
-			header:   r.Header.Clone(),
-			body:     string(body),
-		})
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(statusCode)
-		_, _ = io.WriteString(w, resBody)
-	}))
-	t.Cleanup(srv.Close)
-
-	return srv, func() []telegramTestRequest {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]telegramTestRequest(nil), reqs...)
-	}
-}
 
 func newTelegramTestClient(t *testing.T, url string, opts NewWebhookOpts) *webhookClient {
 	t.Helper()
@@ -179,7 +135,7 @@ func TestWebhookTelegram(t *testing.T) {
 	const okResponse = `{"ok":true,"result":{"message_id":1}}`
 
 	t.Run("sends the message as JSON to the sendMessage method", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC?chat_id=-1001234567890&message_thread_id=42", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), testMessageProvider{telegramMessage: TelegramMessage{
@@ -210,7 +166,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("a plain-text message only sends the chat and the text", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=@mychannel", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), StringMessage("Disk usage is at 95% 🔥"))
@@ -222,7 +178,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("MarkdownV2 parse mode", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), testMessageProvider{telegramMessage: TelegramMessage{
@@ -237,7 +193,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("the key is sent in the configured authorization header", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{Key: "Bearer proxy-key", AuthorizationHeader: "X-Auth"})
 
 		err := wh.SendWebhook(t.Context(), StringMessage("text"))
@@ -262,7 +218,7 @@ func TestWebhookTelegram(t *testing.T) {
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+				srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 				wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{})
 
 				err := wh.SendWebhook(t.Context(), testMessageProvider{telegramMessage: tc.msg})
@@ -276,7 +232,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("an empty plain-text message is rejected without sending a request", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), StringMessage(""))
@@ -286,7 +242,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("errors from the provider are permanent", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusOK, okResponse)
+		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), testMessageProvider{telegramErr: errors.New("boom")})
@@ -297,7 +253,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("error responses include the description from Telegram", func(t *testing.T) {
-		srv, requests := newTelegramTestServer(t, http.StatusBadRequest, `{"ok":false,"error_code":400,"description":"Bad Request: message is too long"}`)
+		srv, requests := newRecordingServer(t, http.StatusBadRequest, `{"ok":false,"error_code":400,"description":"Bad Request: message is too long"}`)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), StringMessage("long message"))
@@ -308,7 +264,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("error responses without a description report the status code", func(t *testing.T) {
-		srv, _ := newTelegramTestServer(t, http.StatusForbidden, "<html>Forbidden</html>")
+		srv, _ := newRecordingServer(t, http.StatusForbidden, "<html>Forbidden</html>")
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{})
 
 		err := wh.SendWebhook(t.Context(), StringMessage("text"))
@@ -318,7 +274,7 @@ func TestWebhookTelegram(t *testing.T) {
 	})
 
 	t.Run("other formats do not include the description", func(t *testing.T) {
-		srv, _ := newTelegramTestServer(t, http.StatusBadRequest, `{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`)
+		srv, _ := newRecordingServer(t, http.StatusBadRequest, `{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`)
 		wh, _ := newTestWebhookClient(t, NewWebhookOpts{URL: srv.URL, AllowPrivateIPs: true})
 
 		err := wh.SendWebhook(t.Context(), StringMessage("text"))

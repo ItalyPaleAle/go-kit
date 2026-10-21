@@ -1,7 +1,7 @@
 package webhook
 
 // MessageProvider is the interface provided by the webhook message data provider
-// Only the plain-text message is required: to customize the message for a format, a provider can also implement the optional interface for that format (SlackMessageProvider, NtfyMessageProvider, or TelegramMessageProvider)
+// Only the plain-text message is required: to customize the message for a format, a provider can also implement the optional interface for that format (SlackMessageProvider, NtfyMessageProvider, TelegramMessageProvider, GoogleChatMessageProvider, or TeamsMessageProvider)
 // For formats whose optional interface is not implemented, the plain-text message is sent
 // A method with the wrong signature silently falls back to the plain-text message, so assert the optional interfaces at compile time, such as with `var _ webhook.NtfyMessageProvider = MyMessage{}`
 type MessageProvider interface {
@@ -25,6 +25,18 @@ type NtfyMessageProvider interface {
 type TelegramMessageProvider interface {
 	// GetTelegramMessage must return the message for the webhook in Telegram format
 	GetTelegramMessage() (TelegramMessage, error)
+}
+
+// GoogleChatMessageProvider is the optional interface for a MessageProvider that customizes the message for the "googlechat" format
+type GoogleChatMessageProvider interface {
+	// GetGoogleChatMessage must return the message for the webhook in Google Chat format
+	GetGoogleChatMessage() (GoogleChatMessage, error)
+}
+
+// TeamsMessageProvider is the optional interface for a MessageProvider that customizes the message for the "teams" format
+type TeamsMessageProvider interface {
+	// GetTeamsMessage must return the message for the webhook in Microsoft Teams format
+	GetTeamsMessage() (TeamsMessage, error)
 }
 
 // SlackMessage is the type for a Slack-compatible message
@@ -82,4 +94,34 @@ func getTelegramMessage(data MessageProvider) (TelegramMessage, error) {
 	}
 
 	return TelegramMessage{Text: text}, nil
+}
+
+// getGoogleChatMessage returns the Google Chat message from the provider, falling back to the plain-text message as the text
+func getGoogleChatMessage(data MessageProvider) (GoogleChatMessage, error) {
+	provider, ok := data.(GoogleChatMessageProvider)
+	if ok {
+		return provider.GetGoogleChatMessage()
+	}
+
+	text, err := data.GetPlainMessage()
+	if err != nil {
+		return GoogleChatMessage{}, err
+	}
+
+	return GoogleChatMessage{Text: text}, nil
+}
+
+// getTeamsMessage returns the Microsoft Teams message from the provider, falling back to the plain-text message as the text, without a title
+func getTeamsMessage(data MessageProvider) (TeamsMessage, error) {
+	provider, ok := data.(TeamsMessageProvider)
+	if ok {
+		return provider.GetTeamsMessage()
+	}
+
+	text, err := data.GetPlainMessage()
+	if err != nil {
+		return TeamsMessage{}, err
+	}
+
+	return TeamsMessage{Text: text}, nil
 }

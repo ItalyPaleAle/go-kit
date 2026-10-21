@@ -87,3 +87,45 @@ func TestGetTelegramMessage(t *testing.T) {
 		require.ErrorContains(t, err, "plain failed")
 	})
 }
+
+func TestGetGoogleChatMessage(t *testing.T) {
+	t.Run("uses the Google Chat message of the provider", func(t *testing.T) {
+		custom := GoogleChatMessage{Text: "*custom*", ThreadKey: "nas"}
+		message, err := getGoogleChatMessage(testMessageProvider{message: "plain", googleChatMessage: custom})
+		require.NoError(t, err)
+		require.Equal(t, custom, message)
+	})
+
+	t.Run("falls back to the plain-text message", func(t *testing.T) {
+		message, err := getGoogleChatMessage(StringMessage("hello chat"))
+		require.NoError(t, err)
+		require.Equal(t, GoogleChatMessage{Text: "hello chat"}, message)
+	})
+
+	t.Run("returns the error of the plain-text message", func(t *testing.T) {
+		_, err := getGoogleChatMessage(plainMessageProvider{err: errors.New("plain failed")})
+		require.Error(t, err)
+		require.ErrorContains(t, err, "plain failed")
+	})
+}
+
+func TestGetTeamsMessage(t *testing.T) {
+	t.Run("uses the Teams message of the provider", func(t *testing.T) {
+		custom := TeamsMessage{Title: "Disk full", Text: "**95%** used"}
+		message, err := getTeamsMessage(testMessageProvider{message: "plain", teamsMessage: custom})
+		require.NoError(t, err)
+		require.Equal(t, custom, message)
+	})
+
+	t.Run("falls back to the plain-text message without a title", func(t *testing.T) {
+		message, err := getTeamsMessage(StringMessage("hello teams"))
+		require.NoError(t, err)
+		require.Equal(t, TeamsMessage{Text: "hello teams"}, message)
+	})
+
+	t.Run("returns the error of the plain-text message", func(t *testing.T) {
+		_, err := getTeamsMessage(plainMessageProvider{err: errors.New("plain failed")})
+		require.Error(t, err)
+		require.ErrorContains(t, err, "plain failed")
+	})
+}

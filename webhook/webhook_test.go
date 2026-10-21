@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,20 +23,26 @@ import (
 )
 
 type testMessageProvider struct {
-	message         string
-	slackMessage    SlackMessage
-	ntfyMessage     NtfyMessage
-	telegramMessage TelegramMessage
-	plainErr        error
-	slackErr        error
-	ntfyErr         error
-	telegramErr     error
+	message           string
+	slackMessage      SlackMessage
+	ntfyMessage       NtfyMessage
+	telegramMessage   TelegramMessage
+	googleChatMessage GoogleChatMessage
+	teamsMessage      TeamsMessage
+	plainErr          error
+	slackErr          error
+	ntfyErr           error
+	telegramErr       error
+	googleChatErr     error
+	teamsErr          error
 }
 
 var (
-	_ SlackMessageProvider    = testMessageProvider{}
-	_ NtfyMessageProvider     = testMessageProvider{}
-	_ TelegramMessageProvider = testMessageProvider{}
+	_ SlackMessageProvider      = testMessageProvider{}
+	_ NtfyMessageProvider       = testMessageProvider{}
+	_ TelegramMessageProvider   = testMessageProvider{}
+	_ GoogleChatMessageProvider = testMessageProvider{}
+	_ TeamsMessageProvider      = testMessageProvider{}
 )
 
 func (tmp testMessageProvider) GetPlainMessage() (string, error) {
@@ -81,6 +88,30 @@ func (tmp testMessageProvider) GetTelegramMessage() (TelegramMessage, error) {
 	}, nil
 }
 
+func (tmp testMessageProvider) GetGoogleChatMessage() (GoogleChatMessage, error) {
+	if tmp.googleChatErr != nil {
+		return GoogleChatMessage{}, tmp.googleChatErr
+	}
+	if tmp.googleChatMessage != (GoogleChatMessage{}) {
+		return tmp.googleChatMessage, nil
+	}
+	return GoogleChatMessage{
+		Text: tmp.message,
+	}, nil
+}
+
+func (tmp testMessageProvider) GetTeamsMessage() (TeamsMessage, error) {
+	if tmp.teamsErr != nil {
+		return TeamsMessage{}, tmp.teamsErr
+	}
+	if tmp.teamsMessage != (TeamsMessage{}) {
+		return tmp.teamsMessage, nil
+	}
+	return TeamsMessage{
+		Text: tmp.message,
+	}, nil
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -118,6 +149,47 @@ func httpResponse(t *testing.T, statusCode int) *http.Response {
 	return r
 }
 
+type recordedRequest struct {
+	method   string
+	path     string
+	rawQuery string
+	header   http.Header
+	body     string
+}
+
+// Starts a server that records the requests it receives, and replies with the given status code and body
+func newRecordingServer(t *testing.T, statusCode int, resBody string) (srv *httptest.Server, requests func() []recordedRequest) {
+	t.Helper()
+
+	var (
+		mu   sync.Mutex
+		reqs []recordedRequest
+	)
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		reqs = append(reqs, recordedRequest{
+			method:   r.Method,
+			path:     r.URL.Path,
+			rawQuery: r.URL.RawQuery,
+			header:   r.Header.Clone(),
+			body:     string(body),
+		})
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		_, _ = io.WriteString(w, resBody)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, func() []recordedRequest {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]recordedRequest(nil), reqs...)
+	}
+}
+
 func TestNewWebhook(t *testing.T) {
 	t.Run("validates required URL", func(t *testing.T) {
 		wh, err := NewWebhook(NewWebhookOpts{})
@@ -141,7 +213,7 @@ func TestNewWebhook(t *testing.T) {
 	})
 
 	t.Run("rejects invalid formats", func(t *testing.T) {
-		wh, err := NewWebhook(NewWebhookOpts{URL: "https://hooks.example.com/endpoint", Format: WebhookFormat("teams")})
+		wh, err := NewWebhook(NewWebhookOpts{URL: "https://hooks.example.com/endpoint", Format: WebhookFormat("carrier-pigeon")})
 		require.Nil(t, wh)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid webhook format")
