@@ -71,12 +71,6 @@ func ntfyHeaders(h http.Header) map[string]string {
 	return res
 }
 
-func TestStringMessageNtfy(t *testing.T) {
-	message, err := StringMessage("hello ntfy").GetNtfyMessage()
-	require.NoError(t, err)
-	require.Equal(t, NtfyMessage{Message: "hello ntfy"}, message)
-}
-
 func TestNewWebhookNtfyFormat(t *testing.T) {
 	whAny, err := NewWebhook(NewWebhookOpts{URL: "https://ntfy.example.com/alerts", Format: FormatNtfy})
 	require.NoError(t, err)

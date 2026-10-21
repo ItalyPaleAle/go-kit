@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,10 +24,11 @@ import (
 type WebhookFormat string
 
 const (
-	FormatSlack   WebhookFormat = "slack"
-	FormatDiscord WebhookFormat = "discord"
-	FormatPlain   WebhookFormat = "plain"
-	FormatNtfy    WebhookFormat = "ntfy"
+	FormatSlack    WebhookFormat = "slack"
+	FormatDiscord  WebhookFormat = "discord"
+	FormatPlain    WebhookFormat = "plain"
+	FormatNtfy     WebhookFormat = "ntfy"
+	FormatTelegram WebhookFormat = "telegram"
 )
 
 const (
@@ -51,6 +53,7 @@ type webhookClient struct {
 	timeout           time.Duration
 	maxAttempts       int
 	retryInterval     time.Duration
+	telegramChat      telegramChat
 
 	log        *slog.Logger
 	httpClient *http.Client
@@ -59,9 +62,12 @@ type webhookClient struct {
 
 type NewWebhookOpts struct {
 	// URL is the webhook endpoint (required)
+	// For the "telegram" format, it is the Bot API URL with the bot token and the chat, such as "https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>"
+	// The chat is a numeric chat ID or a channel username like "@channelusername", and adding "message_thread_id=<id>" to the query string sends to a topic of a forum supergroup
 	URL string
 	// Key is the optional key for the webhook
 	// It is sent as-is in the authorization header, so include any prefix it needs (like "Bearer" or "APIKey")
+	// For the "telegram" format, the bot token is in the URL, so a key is only needed when a proxy in front of a self-hosted Bot API server requires one
 	Key string
 	// AuthorizationHeader is the name of the header that includes the authorization key
 	// This is ignored when format is "discord" or "slack"
@@ -108,6 +114,7 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 	if opts.URL == "" {
 		return nil, errors.New("webhook URL is required")
 	}
+	var tgChat telegramChat
 	switch opts.Format {
 	case FormatSlack, FormatPlain, FormatNtfy:
 		// All good
@@ -118,6 +125,14 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 			return nil, fmt.Errorf("webhook URL validation failed: %w", err)
 		}
 		opts.URL = discordURL
+	case FormatTelegram:
+		// The chat is sent in the body of each request, so the URL keeps only the endpoint of the sendMessage method
+		endpoint, chat, err := parseTelegramURL(opts.URL)
+		if err != nil {
+			return nil, fmt.Errorf("webhook URL validation failed: %w", err)
+		}
+		opts.URL = endpoint
+		tgChat = chat
 	case "":
 		// Default to plain
 		opts.Format = FormatPlain
@@ -181,6 +196,7 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 		timeout:           timeout,
 		maxAttempts:       maxAttempts,
 		retryInterval:     retryInterval,
+		telegramChat:      tgChat,
 
 		log:        opts.Logger,
 		httpClient: httpClient,
@@ -248,6 +264,8 @@ retryLoop:
 			req, err = w.prepareSlackRequest(reqCtx, w.webhookURL, data)
 		case FormatNtfy:
 			req, err = w.prepareNtfyRequest(reqCtx, w.webhookURL, data)
+		case FormatTelegram:
+			req, err = w.prepareTelegramRequest(reqCtx, w.webhookURL, data)
 		// case "plain":
 		default:
 			req, err = w.preparePlainRequest(reqCtx, w.webhookURL, data)
@@ -284,8 +302,8 @@ retryLoop:
 		}
 
 		// Drain and close the body before cancelling the context so the connection can be reused
-		// Limit reading to 1KB
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<10))
+		// Limit reading to 1KB, which is enough for the error details of a failed response
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<10))
 		_ = res.Body.Close()
 		reqCancel()
 
@@ -334,7 +352,7 @@ retryLoop:
 
 		// Any other error is permanent
 		if res.StatusCode < 200 || res.StatusCode > 299 {
-			err = fmt.Errorf("invalid response status code: %d", res.StatusCode)
+			err = w.responseError(res.StatusCode, body)
 			break
 		}
 
@@ -347,6 +365,19 @@ retryLoop:
 	}
 
 	return nil
+}
+
+// responseError returns the error for a response whose status code is not successful
+// The Telegram Bot API describes the error in the body, such as "Bad Request: chat not found", so that is included
+func (w *webhookClient) responseError(statusCode int, body []byte) error {
+	if w.format == FormatTelegram {
+		description := telegramErrorDescription(body)
+		if description != "" {
+			return fmt.Errorf("invalid response status code: %d (%s)", statusCode, description)
+		}
+	}
+
+	return fmt.Errorf("invalid response status code: %d", statusCode)
 }
 
 func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
@@ -385,7 +416,7 @@ func (w *webhookClient) setAuthHeader(req *http.Request) {
 
 func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
 	// Format the message
-	message, err := data.GetSlackMessage()
+	message, err := getSlackMessage(data)
 	if err != nil {
 		return nil, fmt.Errorf("error getting Slack-compatible message: %w", err)
 	}
@@ -422,7 +453,7 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 // To publish to a protected topic, set Key to the full value of the authorization header, such as "Bearer tk_..." for an access token
 func (w *webhookClient) prepareNtfyRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
 	// Format the message
-	message, err := data.GetNtfyMessage()
+	message, err := getNtfyMessage(data)
 	if err != nil {
 		return nil, fmt.Errorf("error getting ntfy message: %w", err)
 	}
@@ -444,6 +475,42 @@ func (w *webhookClient) prepareNtfyRequest(ctx context.Context, webhookUrl strin
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+
+	w.setAuthHeader(req)
+
+	return req, nil
+}
+
+// prepareTelegramRequest prepares a request to the sendMessage method of the Telegram Bot API (https://core.telegram.org/bots/api#sendmessage)
+// The URL is the endpoint of the method, while the chat from the query string of the configured URL is sent in the body
+func (w *webhookClient) prepareTelegramRequest(ctx context.Context, webhookUrl string, data MessageProvider) (req *http.Request, err error) {
+	// Format the message
+	message, err := getTelegramMessage(data)
+	if err != nil {
+		return nil, fmt.Errorf("error getting Telegram message: %w", err)
+	}
+
+	// Build the body first, so an invalid message does not create a request
+	body, err := message.sendMessageBody(w.telegramChat)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Telegram message: %w", err)
+	}
+
+	// HTML escaping is disabled so texts with the HTML parse mode are readable in the request
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	err = enc.Encode(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode Telegram message: %w", err)
+	}
+
+	// Create the request
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookUrl, &buf)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	w.setAuthHeader(req)
 

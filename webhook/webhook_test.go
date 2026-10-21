@@ -22,13 +22,21 @@ import (
 )
 
 type testMessageProvider struct {
-	message      string
-	slackMessage SlackMessage
-	ntfyMessage  NtfyMessage
-	plainErr     error
-	slackErr     error
-	ntfyErr      error
+	message         string
+	slackMessage    SlackMessage
+	ntfyMessage     NtfyMessage
+	telegramMessage TelegramMessage
+	plainErr        error
+	slackErr        error
+	ntfyErr         error
+	telegramErr     error
 }
+
+var (
+	_ SlackMessageProvider    = testMessageProvider{}
+	_ NtfyMessageProvider     = testMessageProvider{}
+	_ TelegramMessageProvider = testMessageProvider{}
+)
 
 func (tmp testMessageProvider) GetPlainMessage() (string, error) {
 	if tmp.plainErr != nil {
@@ -58,6 +66,18 @@ func (tmp testMessageProvider) GetNtfyMessage() (NtfyMessage, error) {
 	}
 	return NtfyMessage{
 		Message: tmp.message,
+	}, nil
+}
+
+func (tmp testMessageProvider) GetTelegramMessage() (TelegramMessage, error) {
+	if tmp.telegramErr != nil {
+		return TelegramMessage{}, tmp.telegramErr
+	}
+	if tmp.telegramMessage != (TelegramMessage{}) {
+		return tmp.telegramMessage, nil
+	}
+	return TelegramMessage{
+		Text: tmp.message,
 	}, nil
 }
 
@@ -303,6 +323,17 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		assert.Equal(t, "ApiKey test-key", req.Header.Get("Authorization"))
 		assert.Empty(t, req.Header.Get("X-Webhook-Key"))
 		assertBodyEqual(t, req.Body, `{"text":"hello slack"}`+"\n")
+	})
+
+	t.Run("slack-compatible webhooks send the plain-text message when the provider has no Slack message", func(t *testing.T) {
+		wh, _ := newTestWebhookClient(t, NewWebhookOpts{Format: FormatSlack})
+
+		req, err := wh.prepareSlackRequest(t.Context(), wh.webhookURL, StringMessage("plain <text>"))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = req.Body.Close()
+		})
+		assertBodyEqual(t, req.Body, `{"text":"plain <text>"}`+"\n")
 	})
 
 	t.Run("Discord webhooks reuse the slack-compatible formatter", func(t *testing.T) {
