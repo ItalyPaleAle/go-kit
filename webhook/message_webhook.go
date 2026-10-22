@@ -3,7 +3,6 @@ package webhook
 // MessageProvider is the interface provided by the webhook message data provider
 // Only the plain-text message is required: to customize the message for a format, a provider can also implement the optional interface for that format (SlackMessageProvider, NtfyMessageProvider, TelegramMessageProvider, GoogleChatMessageProvider, or TeamsMessageProvider)
 // For formats whose optional interface is not implemented, the plain-text message is sent
-// A method with the wrong signature silently falls back to the plain-text message, so assert the optional interfaces at compile time, such as with `var _ webhook.NtfyMessageProvider = MyMessage{}`
 type MessageProvider interface {
 	// GetPlainMessage must return the message for the webhook in plain-text format
 	GetPlainMessage() (string, error)
@@ -44,7 +43,7 @@ type SlackMessage struct {
 	Text string `json:"text"`
 }
 
-// StringMessage is a MessageProvider that wraps a simple string, which is sent as-is in every format
+// StringMessage is a MessageProvider that wraps a simple string
 type StringMessage string
 
 func (s StringMessage) GetPlainMessage() (string, error) {

@@ -192,7 +192,7 @@ func TestWebhookTelegram(t *testing.T) {
 		assert.JSONEq(t, `{"chat_id":"42","text":"*bold* text\\.","parse_mode":"MarkdownV2"}`, reqs[0].body)
 	})
 
-	t.Run("the key is sent in the configured authorization header", func(t *testing.T) {
+	t.Run("the key is ignored", func(t *testing.T) {
 		srv, requests := newRecordingServer(t, http.StatusOK, okResponse)
 		wh := newTelegramTestClient(t, srv.URL+"/bot123:ABC/sendMessage?chat_id=42", NewWebhookOpts{Key: "Bearer proxy-key", AuthorizationHeader: "X-Auth"})
 
@@ -201,7 +201,7 @@ func TestWebhookTelegram(t *testing.T) {
 
 		reqs := requests()
 		require.Len(t, reqs, 1)
-		assert.Equal(t, "Bearer proxy-key", reqs[0].header.Get("X-Auth"))
+		assert.Empty(t, reqs[0].header.Get("X-Auth"))
 		assert.Empty(t, reqs[0].header.Get("Authorization"))
 	})
 

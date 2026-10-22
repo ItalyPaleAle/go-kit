@@ -151,11 +151,13 @@ func parseTelegramURL(webhookURL string) (endpoint string, chat telegramChat, er
 
 // isValidTelegramChatID returns true if the value is a numeric chat ID or a channel username in the format "@channelusername"
 func isValidTelegramChatID(val string) bool {
+	// Channel username
 	username, ok := strings.CutPrefix(val, "@")
 	if ok {
 		return username != ""
 	}
 
+	// Numeric ID
 	_, err := strconv.ParseInt(val, 10, 64)
 	return err == nil
 }

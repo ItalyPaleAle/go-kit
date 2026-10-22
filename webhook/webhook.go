@@ -64,15 +64,9 @@ type webhookClient struct {
 
 type NewWebhookOpts struct {
 	// URL is the webhook endpoint (required)
-	// For the "telegram" format, it is the Bot API URL with the bot token and the chat, such as "https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>"
-	// The chat is a numeric chat ID or a channel username like "@channelusername", and adding "message_thread_id=<id>" to the query string sends to a topic of a forum supergroup
-	// For the "googlechat" format, it is the webhook URL of the space, including the key and token query parameters
-	// For the "teams" format, it is the URL of a webhook created with the Workflows app
-	// Workflows accept the request before running the flow, so errors that happen while posting the message to Teams are not returned by SendWebhook
 	URL string
 	// Key is the optional key for the webhook
 	// It is sent as-is in the authorization header, so include any prefix it needs (like "Bearer" or "APIKey")
-	// For the "telegram" format, the bot token is in the URL, so a key is only needed when a proxy in front of a self-hosted Bot API server requires one
 	Key string
 	// AuthorizationHeader is the name of the header that includes the authorization key
 	// This is ignored when format is "discord" or "slack"
@@ -226,7 +220,6 @@ func discordSlackURL(webhookURL string) (string, error) {
 }
 
 // validateWebhookURL checks that the webhook URL uses an allowed scheme (http/https) and has a host
-// For the ntfy format, it also checks that the path includes the topic, and for Google Chat that the URL includes the space, key, and token
 // Error messages never include the URL, as it commonly contains secrets
 func validateWebhookURL(webhookUrl string, format WebhookFormat) error {
 	parsed, err := url.Parse(webhookUrl)
@@ -252,6 +245,7 @@ func validateWebhookURL(webhookUrl string, format WebhookFormat) error {
 		return errors.New("ntfy webhook URL must include the topic in the path")
 	}
 
+	// For Google Chat, check that the URL includes the space, key, and token
 	if format == FormatGoogleChat {
 		err = validateGoogleChatURL(parsed)
 		if err != nil {
@@ -318,7 +312,7 @@ retryLoop:
 		}
 
 		// Drain and close the body before cancelling the context so the connection can be reused
-		// Limit reading to 1KB, which is enough for the error details of a failed response
+		// Limit reading to 1KB
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<10))
 		_ = res.Body.Close()
 		reqCancel()
@@ -384,7 +378,6 @@ retryLoop:
 }
 
 // responseError returns the error for a response whose status code is not successful
-// Some services describe the error in the body, such as "Bad Request: chat not found" for Telegram, so that is included
 func (w *webhookClient) responseError(statusCode int, body []byte) error {
 	var description string
 	switch w.format {
@@ -418,10 +411,10 @@ func jsonErrorMessage(body []byte) string {
 }
 
 // encodeJSONBody encodes the body of a request as JSON
-// HTML escaping is disabled so markup in the text, such as Telegram's HTML or Google Chat's <url|text> links, is readable in the request
 func encodeJSONBody(v any) (*bytes.Buffer, error) {
 	buf := &bytes.Buffer{}
 	enc := json.NewEncoder(buf)
+	// HTML escaping is disabled so markup in the text, such as Telegram's HTML or Google Chat's <url|text> links, is readable in the request
 	enc.SetEscapeHTML(false)
 	err := enc.Encode(v)
 	if err != nil {
@@ -558,8 +551,6 @@ func (w *webhookClient) prepareTelegramRequest(ctx context.Context, webhookUrl s
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-
-	w.setAuthHeader(req)
 
 	return req, nil
 }
