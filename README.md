@@ -26,7 +26,7 @@ A collection of utility packages for Go applications.
 - **tsnetserver**: A wrapper around Tailscale's `tsnet.Server` for starting listeners, handling Funnel requests, and resolving peer identity.
 - **ttlcache**: An efficient generic cache with TTL (time-to-live) expiration. Provides concurrent access via HaxMap with automatic background garbage collection of expired items.
 - **utils**: Small general-purpose helpers.
-- **webhook**: Webhook client utilities for plain-text, Slack-compatible, Discord, and ntfy payloads, with retries, OpenTelemetry transport instrumentation, and SSRF protections.
+- **webhook**: Webhook client utilities for plain-text, Slack-compatible, Discord, ntfy, Telegram, Google Chat, and Microsoft Teams payloads, with retries, OpenTelemetry transport instrumentation, and SSRF protections.
 - **auditlogs/siem**: Streams audit log events to an external HTTP collector (a SIEM) as NDJSON or batched JSON. Reads events and persists its cursor through an application-provided store, so delivery is at-least-once and survives process restarts and collector outages, with retries, OpenTelemetry transport instrumentation, and optional SSRF protections.
 
 ## Tools
