@@ -20,6 +20,7 @@ A collection of utility packages for Go applications.
 - **objstore**: An object store abstraction over the local file system, S3 (and S3-compatible stores), and Vercel Blob, selected by a DSN.
 - **observability**: OpenTelemetry setup helpers for logs, metrics, and traces, with integration for the standard library's `log/slog` package.
 - **servicerunner**: Manages multiple background services running concurrently. Runs services in parallel goroutines and cancels all services if any one returns an error, collecting and returning all errors together.
+- **servicerunner/process**: Runs an external process as a service, making the application its process manager. The process is restarted according to a restart policy, and when the context is canceled it's sent a shutdown signal and killed if it doesn't exit within a grace timeout.
 - **signals**: Graceful shutdown handling via OS signals. Returns a context that cancels on SIGINT or SIGTERM, with a second signal forcing immediate termination.
 - **slog**: Utilities for the standard library's structured logging package (`log/slog`)
 - **testutils**: Test helpers and doubles used by the repository's unit tests, including an HTTP round tripper stub.
