@@ -3,8 +3,10 @@ package objstore
 import (
 	"context"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -193,6 +195,123 @@ func TestFSBackend(t *testing.T) {
 	t.Run("describes itself without leaking anything", func(t *testing.T) {
 		backend, root := newBackend(t)
 		assert.Contains(t, backend.Description(), root)
+	})
+}
+
+func TestFSBackendPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no permission bits beyond read-only")
+	}
+
+	// Report the permissions of a file or folder
+	modeOf := func(t *testing.T, path string) fs.FileMode {
+		t.Helper()
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		return info.Mode().Perm()
+	}
+
+	t.Run("the defaults keep objects to the process's user", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "objects")
+		backend, err := New("fs:"+root, Options{})
+		require.NoError(t, err)
+
+		_, err = backend.Put(t.Context(), "a/b/200x200.webp", strings.NewReader("thumbnail"), 1024, "image/webp")
+		require.NoError(t, err)
+
+		assert.Equal(t, DefaultFSFileMode, modeOf(t, filepath.Join(root, "a", "b", "200x200.webp")))
+		assert.Equal(t, DefaultFSDirMode, modeOf(t, filepath.Join(root, "a", "b")))
+		assert.Equal(t, DefaultFSDirMode, modeOf(t, filepath.Join(root, "a")))
+		assert.Equal(t, DefaultFSDirMode, modeOf(t, root))
+		assert.NotContains(t, backend.Description(), "permissions")
+	})
+
+	// 0775 is more than the usual umask of 022 lets a new folder have, so this also shows the permissions are set rather than left to the umask
+	t.Run("the DSN sets the permissions of files and folders", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "objects")
+		backend, err := New("fs:"+root+"?fileMode=0664&dirMode=0775", Options{})
+		require.NoError(t, err)
+		assert.Contains(t, backend.Description(), "permissions 0664 for files and 0775 for folders")
+
+		_, err = backend.Put(t.Context(), "a/b/200x200.webp", strings.NewReader("thumbnail"), 1024, "image/webp")
+		require.NoError(t, err)
+
+		assert.Equal(t, fs.FileMode(0o664), modeOf(t, filepath.Join(root, "a", "b", "200x200.webp")))
+		assert.Equal(t, fs.FileMode(0o775), modeOf(t, filepath.Join(root, "a", "b")))
+		assert.Equal(t, fs.FileMode(0o775), modeOf(t, filepath.Join(root, "a")))
+		assert.Equal(t, fs.FileMode(0o775), modeOf(t, root))
+
+		// A write replaces the file, so an overwritten object gets the permissions too
+		path := filepath.Join(root, "a", "b", "200x200.webp")
+		err = os.Chmod(path, 0o600)
+		require.NoError(t, err)
+		_, err = backend.Put(t.Context(), "a/b/200x200.webp", strings.NewReader("again"), 1024, "image/webp")
+		require.NoError(t, err)
+		assert.Equal(t, fs.FileMode(0o664), modeOf(t, path))
+	})
+
+	t.Run("a bare path and the options in code take them too", func(t *testing.T) {
+		dir := t.TempDir()
+		backend, err := New(filepath.Join(dir, "bare")+"?fileMode=0o640", Options{})
+		require.NoError(t, err)
+		_, err = backend.Put(t.Context(), "photo.jpg", strings.NewReader("image"), 1024, "image/jpeg")
+		require.NoError(t, err)
+		assert.Equal(t, fs.FileMode(0o640), modeOf(t, filepath.Join(dir, "bare", "photo.jpg")))
+		// The folder isn't named after the options
+		assert.NoDirExists(t, filepath.Join(dir, "bare?fileMode=0o640"))
+
+		coded, err := NewFSWithOptions(filepath.Join(dir, "coded"), FSOptions{DirMode: 0o755})
+		require.NoError(t, err)
+		_, err = coded.Put(t.Context(), "a/photo.jpg", strings.NewReader("image"), 1024, "image/jpeg")
+		require.NoError(t, err)
+		assert.Equal(t, DefaultFSFileMode, modeOf(t, filepath.Join(dir, "coded", "a", "photo.jpg")))
+		assert.Equal(t, fs.FileMode(0o755), modeOf(t, filepath.Join(dir, "coded", "a")))
+	})
+
+	// The root may be a mount point or a folder another tool manages, which the process may not even own
+	t.Run("leaves the folders that already exist as they are", func(t *testing.T) {
+		root := t.TempDir()
+		err := os.Mkdir(filepath.Join(root, "a"), 0o700)
+		require.NoError(t, err)
+		err = os.Chmod(root, 0o700) //nolint:gosec // A folder needs the execute bit to be entered
+		require.NoError(t, err)
+
+		backend, err := New(root+"?dirMode=0755", Options{})
+		require.NoError(t, err)
+		_, err = backend.Put(t.Context(), "a/b/photo.jpg", strings.NewReader("image"), 1024, "image/jpeg")
+		require.NoError(t, err)
+
+		assert.Equal(t, fs.FileMode(0o700), modeOf(t, root))
+		assert.Equal(t, fs.FileMode(0o700), modeOf(t, filepath.Join(root, "a")))
+		assert.Equal(t, fs.FileMode(0o755), modeOf(t, filepath.Join(root, "a", "b")))
+	})
+
+	invalid := map[string]string{
+		"an unknown option":            "?mode=0644",
+		"a mode that isn't octal":      "?fileMode=0899",
+		"a mode past 0777":             "?dirMode=01777",
+		"an empty mode":                "?fileMode=",
+		"a mode of zero":               "?fileMode=0000",
+		"files the process can't read": "?fileMode=0244",
+		"folders it can't enter":       "?dirMode=0655",
+	}
+	for name, options := range invalid {
+		t.Run("refuses "+name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "objects")
+			_, err := New("fs:"+root+options, Options{})
+			require.Error(t, err)
+
+			// Nothing is created for a DSN that's refused
+			assert.NoDirExists(t, root)
+		})
+	}
+
+	t.Run("refuses options with bits beyond the permissions", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "objects")
+		_, err := NewFSWithOptions(root, FSOptions{DirMode: fs.ModeSetgid | 0o750})
+		require.Error(t, err)
+		assert.NoDirExists(t, root)
 	})
 }
 
