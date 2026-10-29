@@ -788,6 +788,31 @@ func TestResolveCredential(t *testing.T) {
 	}
 }
 
+// fakeSignal is an os.Signal that isn't a syscall.Signal
+type fakeSignal struct{}
+
+func (fakeSignal) String() string { return "fake" }
+func (fakeSignal) Signal()        {}
+
+func TestSignalValidation(t *testing.T) {
+	t.Run("unsupported shutdown signal", func(t *testing.T) {
+		_, err := NewService(WithCommand("foo"), WithShutdownSignal(fakeSignal{}))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "unsupported shutdown signal: fake")
+	})
+
+	t.Run("unsupported parent death signal", func(t *testing.T) {
+		_, err := NewService(WithCommand("foo"), WithParentDeathSignal(fakeSignal{}))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "unsupported parent death signal: fake")
+	})
+
+	t.Run("nil parent death signal disables it", func(t *testing.T) {
+		_, err := NewService(WithCommand("foo"), WithParentDeathSignal(nil))
+		require.NoError(t, err)
+	})
+}
+
 func TestWithServiceRunner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

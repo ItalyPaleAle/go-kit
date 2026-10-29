@@ -38,6 +38,7 @@ type options struct {
 	args                 []string
 	shutdownGraceTimeout time.Duration
 	shutdownSignal       os.Signal
+	parentDeathSignal    os.Signal
 	restartPolicy        RestartPolicy
 	restartDelayInitial  time.Duration
 	restartDelayMax      time.Duration
@@ -84,9 +85,10 @@ func (o *options) validate() error {
 		return errors.New("shutdown signal must not be nil")
 	}
 
-	err := validateSignal(o.shutdownSignal)
-	if err != nil {
-		return err
+	if !isSupportedSignal(o.shutdownSignal) {
+		return fmt.Errorf("unsupported shutdown signal: %v", o.shutdownSignal)
+	} else if o.parentDeathSignal != nil && !isSupportedSignal(o.parentDeathSignal) {
+		return fmt.Errorf("unsupported parent death signal: %v", o.parentDeathSignal)
 	}
 
 	switch o.restartPolicy {
@@ -145,6 +147,17 @@ func WithShutdownGraceTimeout(timeout time.Duration) Option {
 func WithShutdownSignal(sig os.Signal) Option {
 	return func(o *options) {
 		o.shutdownSignal = sig
+	}
+}
+
+// WithParentDeathSignal sets a signal the kernel sends to the process if the application dies without stopping it, for example because it was killed with SIGKILL or crashed
+// Without it, the process is left running as an orphan when that happens, unless something else stops it (like the container runtime or systemd)
+// The signal is sent only to the process, not to the processes it spawned
+// On Linux, the signal is not sent if the command is a set-user-ID or set-group-ID binary, or has file capabilities
+// Only supported on Linux and FreeBSD, and ignored on other platforms
+func WithParentDeathSignal(sig os.Signal) Option {
+	return func(o *options) {
+		o.parentDeathSignal = sig
 	}
 }
 

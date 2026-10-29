@@ -12,14 +12,17 @@ import (
 
 var defaultShutdownSignal = os.Interrupt
 
+// The platform can't signal the process when the application dies
+const parentDeathSignalSupported = false
+
 type credential struct{}
 
-func sysProcAttr(_ *credential) *syscall.SysProcAttr {
+func sysProcAttr(_ *credential, _ os.Signal) *syscall.SysProcAttr {
 	return nil
 }
 
-func validateSignal(_ os.Signal) error {
-	return nil
+func isSupportedSignal(_ os.Signal) bool {
+	return true
 }
 
 // signalProcess sends sig to the process

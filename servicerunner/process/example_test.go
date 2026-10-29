@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/italypaleale/go-kit/servicerunner"
@@ -20,6 +21,8 @@ func ExampleNewService() {
 		process.WithRestart(process.RestartOnFailure),
 		process.WithRestartLimit(3),
 		process.WithShutdownGraceTimeout(10*time.Second),
+		// Send the server SIGTERM if the application dies without stopping it (on Linux and FreeBSD)
+		process.WithParentDeathSignal(syscall.SIGTERM),
 		process.WithEnv("LOG_LEVEL", "debug"),
 		process.WithStdout(os.Stdout),
 		process.WithStderr(os.Stderr),

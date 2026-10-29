@@ -17,6 +17,7 @@ func TestNewProcessDefaults(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, p.args)
 	assert.Equal(t, 5*time.Second, p.shutdownGraceTimeout)
 	assert.Equal(t, defaultShutdownSignal, p.shutdownSignal)
+	assert.Nil(t, p.parentDeathSignal)
 	assert.Equal(t, RestartAlways, p.restartPolicy)
 	assert.Equal(t, time.Second, p.restartDelayInitial)
 	assert.Equal(t, 30*time.Second, p.restartDelayMax)

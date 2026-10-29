@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/italypaleale/go-kit/servicerunner"
@@ -217,13 +218,21 @@ func (p *process) shouldRestart(exitErr error) bool {
 
 // runOnce starts the process and waits for it to exit, stopping it if the context is canceled
 // It returns an error only when the service must return right away: if the process couldn't be started, or if the start hook panicked
+// Once the process is started, it returns only after the process has exited
 func (p *process) runOnce(ctx context.Context, pump *stdinPump) (runResult, error) {
+	// Linux sends the parent death signal when the thread that started the process exits, which can happen while the application is still running, for example when a goroutine locked to that thread returns without unlocking it
+	// Keeping this goroutine on its thread until the process exits stops any other goroutine from running there and ending the thread
+	if p.parentDeathSignal != nil && parentDeathSignalSupported {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+	}
+
 	cmd := exec.Command(p.command, p.args...) //nolint:gosec // Running a command chosen by the caller is the purpose of this package
 	cmd.Dir = p.workingDirectory
 	cmd.Env = p.environ()
 	cmd.Stdout = p.stdout
 	cmd.Stderr = p.stderr
-	cmd.SysProcAttr = sysProcAttr(p.cred)
+	cmd.SysProcAttr = sysProcAttr(p.cred, p.parentDeathSignal)
 
 	// After the process exits, Wait waits for its output to be copied, which never completes if a process it spawned keeps the output streams open
 	cmd.WaitDelay = p.shutdownGraceTimeout

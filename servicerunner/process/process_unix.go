@@ -17,20 +17,23 @@ type credential = syscall.Credential
 
 // sysProcAttr returns the attributes used to start the process
 // The process runs in its own process group, so signals from the terminal reach only the current process, and signals sent to stop the process also reach any process it spawned
-func sysProcAttr(cred *credential) *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{
+func sysProcAttr(cred *credential, parentDeathSignal os.Signal) *syscall.SysProcAttr {
+	attr := &syscall.SysProcAttr{
 		Setpgid:    true,
 		Credential: cred,
 	}
-}
 
-func validateSignal(sig os.Signal) error {
-	_, ok := sig.(syscall.Signal)
-	if !ok {
-		return fmt.Errorf("unsupported shutdown signal: %v", sig)
+	sig, ok := parentDeathSignal.(syscall.Signal)
+	if ok {
+		setParentDeathSignal(attr, sig)
 	}
 
-	return nil
+	return attr
+}
+
+func isSupportedSignal(sig os.Signal) bool {
+	_, ok := sig.(syscall.Signal)
+	return ok
 }
 
 // signalProcess sends sig to every process in the process group of proc
