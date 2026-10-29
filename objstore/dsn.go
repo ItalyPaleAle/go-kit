@@ -26,7 +26,7 @@ type Options struct {
 
 // New creates a backend from its DSN
 //
-// Local file system: `fs:/path/to/folder`, `local:/path/to/folder`, or a path with no scheme at all
+// Local file system: `fs:/path/to/folder`, `local:/path/to/folder`, or a path with no scheme at all, each optionally followed by `?fileMode=0644&dirMode=0755`
 // S3: `s3://<access-key>:<secret-key>@s3.<region>.amazonaws.com/<bucket>?prefix=<key-prefix>&sessionToken=<token>&publicUrl=<base-url>`
 // Vercel Blob: `vercelblob:?tokenEnv=<environment-variable>&access=<public|private>&prefix=<key-prefix>`, or `vercelblob:?auth=oidc&storeIdEnv=<environment-variable>&…`
 func New(dsn string, opts Options) (Backend, error) {
@@ -39,7 +39,7 @@ func New(dsn string, opts Options) (Backend, error) {
 	scheme, value := Scheme(dsn)
 	switch scheme {
 	case "", SchemeFS, SchemeLocal:
-		return newFSBackend(value)
+		return newFSBackendFromDSN(value)
 	case SchemeS3:
 		return newS3BackendFromDSN(dsn)
 	case SchemeVercelBlob:

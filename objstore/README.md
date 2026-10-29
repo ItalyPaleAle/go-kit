@@ -17,7 +17,7 @@ result, err := store.Put(ctx, "site/photo.webp", body, maxSize, "image/webp")
 
 | Backend | DSN |
 |---|---|
-| Local file system | `/path/to/folder`, `fs:/path/to/folder`, or `local:/path/to/folder` |
+| Local file system | `/path/to/folder`, `fs:/path/to/folder`, or `local:/path/to/folder`, each optionally followed by `?fileMode=<octal>&dirMode=<octal>` |
 | S3, or an S3-compatible store | `s3://<access-key>:<secret-key>@s3.<region>.amazonaws.com/<bucket>?prefix=<key-prefix>&sessionToken=<token>&publicUrl=<base-url>` |
 | Vercel Blob, with a read-write token | `vercelblob:?tokenEnv=<environment-variable>&access=<private\|public>&prefix=<key-prefix>` |
 | Vercel Blob, with OIDC | `vercelblob:?auth=oidc&storeIdEnv=<environment-variable>&access=<private\|public>&prefix=<key-prefix>` |
@@ -25,6 +25,8 @@ result, err := store.Put(ctx, "site/photo.webp", body, maxSize, "image/webp")
 A DSN with no scheme at all is a file system path, and a single-character scheme is read as a Windows drive letter rather than as a backend.
 
 The `prefix` option is the backend's own concern: it's applied to every key on the way to the provider, so callers pass logical keys and never have to know whether a prefix is in play.
+
+The file system backend creates files with permissions `0600` and folders with `0750` by default. To change that, use the "query string" parameters `fileMode` and `dirMode` change that, for example `fs:/srv/images?fileMode=0644&dirMode=0755`. The permissions are set on every file as it's written and on every folder the backend creates, whatever the process's umask, while folders that already exist keep theirs. Files need at least `0600` and folders `0700`.
 
 ## What a backend does
 
