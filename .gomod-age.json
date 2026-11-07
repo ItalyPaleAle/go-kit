@@ -6,5 +6,9 @@
     "tailscale.com"
   ],
   "allow": [
+    {
+      "module": "github.com/Azure/azure-sdk-for-go/sdk/azcore",
+      "version": "v1.24.0"
+    }
   ]
 }
