@@ -32,6 +32,22 @@ type NewTSNetServerOpts struct {
 	// If this is empty, the auth key can also be read from the TS_AUTH_KEY env var or users can use interactive login
 	AuthKey string
 
+	// ClientID for workload identity federation
+	// Optional query attributes can be appended, e.g. `?ephemeral=false&preauthorized=true`; without them the generated auth key is ephemeral
+	// If empty, falls back to the TS_CLIENT_ID env var
+	// Note: tsnet performs the token exchange on every startup, even when the node is already enrolled
+	ClientID string
+
+	// IDToken from the identity provider, exchanged with the control server for workload identity federation
+	// If empty, falls back to the TS_ID_TOKEN env var
+	// Mutually exclusive with Audience
+	IDToken string
+
+	// Audience to use when requesting an ID token from a well-known identity provider (e.g. AWS, GCP, GitHub Actions) for workload identity federation
+	// If empty, falls back to the TS_AUDIENCE env var
+	// Mutually exclusive with IDToken
+	Audience string
+
 	// If true, makes the node ephemeral
 	Ephemeral bool
 
@@ -56,6 +72,9 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 	tsLogger := slog.With("scope", "tsnet")
 	tsrv := &tsnet.Server{
 		Hostname:  opts.Hostname,
+		ClientID:  opts.ClientID,
+		IDToken:   opts.IDToken,
+		Audience:  opts.Audience,
 		AuthKey:   opts.AuthKey,
 		Dir:       opts.StateDir,
 		Ephemeral: opts.Ephemeral,
