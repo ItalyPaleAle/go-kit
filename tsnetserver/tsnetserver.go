@@ -34,6 +34,7 @@ type NewTSNetServerOpts struct {
 
 	// ClientID for workload identity federation
 	// Optional query attributes can be appended, e.g. `?ephemeral=false&preauthorized=true` (without them the generated auth key is ephemeral)
+	// See: https://tailscale.com/docs/features/workload-identity-federation#register-new-nodes-using-workload-identity
 	// If empty, falls back to the TS_CLIENT_ID env var
 	// Note: tsnet performs the token exchange on every startup, even when the node is already enrolled
 	ClientID string
