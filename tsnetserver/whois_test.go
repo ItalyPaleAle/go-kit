@@ -3,6 +3,7 @@ package tsnetserver
 import (
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,26 @@ func TestWhoIsFromResponse(t *testing.T) {
 		assert.Equal(t, []string{"tag:ci"}, res.Tags)
 		assert.Contains(t, res.CapMap, peercap.Cap("example.com/cap"))
 		assert.False(t, res.Shared)
+		assert.False(t, res.KeyExpired)
+		assert.True(t, res.KeyExpiry.IsZero())
+		assert.False(t, res.Jailed)
+		assert.False(t, res.UnsignedPeerAPIOnly)
+	})
+
+	t.Run("node state", func(t *testing.T) {
+		keyExpiry := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		resp := testWhoIsResponse()
+		resp.Node.Expired = true
+		resp.Node.KeyExpiry = keyExpiry
+		resp.Node.IsJailed = true
+		resp.Node.UnsignedPeerAPIOnly = true
+
+		res, err := whoIsFromResponse(resp)
+		require.NoError(t, err)
+		assert.True(t, res.KeyExpired)
+		assert.Equal(t, keyExpiry, res.KeyExpiry)
+		assert.True(t, res.Jailed)
+		assert.True(t, res.UnsignedPeerAPIOnly)
 	})
 
 	t.Run("shared node", func(t *testing.T) {

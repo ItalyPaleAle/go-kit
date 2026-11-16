@@ -2,6 +2,8 @@ package tsnetserver
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -160,22 +162,58 @@ func (t *TSNetServer) LocalClient() (*local.Client, error) {
 	return lc, nil
 }
 
+// Listen returns a TLS listener on the tailnet, which offers HTTP/2 and HTTP/1.1 through ALPN
 func (t *TSNetServer) Listen(port int) (net.Listener, error) {
-	ln, err := t.server.ListenTLS("tcp", ":"+strconv.Itoa(port))
+	// tsnet's ListenTLS doesn't accept a TLS configuration, and its default one doesn't offer HTTP/2, so this does the same with a custom configuration
+	st, err := t.server.Up(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Tailscale node status: %w", err)
+	}
+
+	if st.CurrentTailnet == nil || !st.CurrentTailnet.MagicDNSEnabled {
+		return nil, errors.New("MagicDNS must be enabled in the tailnet; see https://tailscale.com/s/https")
+	}
+
+	if len(st.CertDomains) == 0 {
+		return nil, errors.New("HTTPS must be enabled in the tailnet; see https://tailscale.com/s/https")
+	}
+
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Tailscale local client: %w", err)
+	}
+
+	ln, err := t.server.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tsnet listener: %w", err)
 	}
 
-	return ln, nil
+	tlsLn := tls.NewListener(ln, newTLSConfig(lc.GetCertificate))
+	return tlsLn, nil
 }
 
+// ListenFunnel returns a TLS listener on the tailnet and on Tailscale Funnel, which offers HTTP/2 and HTTP/1.1 through ALPN
 func (t *TSNetServer) ListenFunnel(port int) (net.Listener, error) {
-	ln, err := t.server.ListenFunnel("tcp", ":"+strconv.Itoa(port))
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Tailscale local client: %w", err)
+	}
+
+	ln, err := t.server.ListenFunnel("tcp", ":"+strconv.Itoa(port), tsnet.FunnelTLSConfig(newTLSConfig(lc.GetCertificate)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tsnet funnel listener: %w", err)
 	}
 
 	return ln, nil
+}
+
+// Returns the TLS configuration for the listeners
+// http.Server only serves HTTP/2 on connections where ALPN negotiated it
+func newTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *tls.Config {
+	return &tls.Config{
+		GetCertificate: getCertificate,
+		NextProtos:     []string{"h2", "http/1.1"},
+	}
 }
 
 // Close closes the tsnet server

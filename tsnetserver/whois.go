@@ -13,15 +13,19 @@ import (
 )
 
 type TailscaleWhoIs struct {
-	NodeID        string             `json:"nodeId"`
-	Name          string             `json:"name"`
-	Hostname      string             `json:"hostname"`
-	IP4           string             `json:"ip4"`
-	IP6           string             `json:"ip6"`
-	UserLoginName string             `json:"userLoginName,omitempty"`
-	Tags          []string           `json:"tags,omitempty"`
-	CapMap        tailcfg.PeerCapMap `json:"capMap,omitempty"`
-	Shared        bool               `json:"shared,omitempty"`
+	NodeID              string             `json:"nodeId"`
+	Name                string             `json:"name"`
+	Hostname            string             `json:"hostname"`
+	IP4                 string             `json:"ip4"`
+	IP6                 string             `json:"ip6"`
+	UserLoginName       string             `json:"userLoginName,omitempty"`
+	Tags                []string           `json:"tags,omitempty"`
+	CapMap              tailcfg.PeerCapMap `json:"capMap,omitempty"`
+	Shared              bool               `json:"shared,omitempty"`
+	KeyExpired          bool               `json:"keyExpired,omitempty"`
+	KeyExpiry           time.Time          `json:"keyExpiry,omitzero"`
+	Jailed              bool               `json:"jailed,omitempty"`
+	UnsignedPeerAPIOnly bool               `json:"unsignedPeerApiOnly,omitempty"`
 }
 
 // WhoIs performs a "whois" request with the LocalClient and returns information about the node
@@ -79,6 +83,11 @@ func whoIsFromResponse(whois *apitype.WhoIsResponse) (res TailscaleWhoIs, err er
 
 		// Sharer is set only on nodes shared in from another tailnet
 		Shared: !whois.Node.Sharer.IsZero(),
+
+		KeyExpired:          whois.Node.Expired,
+		KeyExpiry:           whois.Node.KeyExpiry,
+		Jailed:              whois.Node.IsJailed,
+		UnsignedPeerAPIOnly: whois.Node.UnsignedPeerAPIOnly,
 	}
 
 	if whois.UserProfile != nil {
