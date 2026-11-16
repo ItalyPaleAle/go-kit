@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
 )
 
@@ -20,6 +21,7 @@ type TailscaleWhoIs struct {
 	UserLoginName string             `json:"userLoginName,omitempty"`
 	Tags          []string           `json:"tags,omitempty"`
 	CapMap        tailcfg.PeerCapMap `json:"capMap,omitempty"`
+	Shared        bool               `json:"shared,omitempty"`
 }
 
 // WhoIs performs a "whois" request with the LocalClient and returns information about the node
@@ -52,6 +54,15 @@ func (t *TSNetServer) WhoIs(r *http.Request) (res TailscaleWhoIs, err error) {
 		return res, fmt.Errorf("failed to query Tailscale whois: %w", err)
 	}
 
+	return whoIsFromResponse(whois)
+}
+
+// Converts the response from the LocalAPI whois call
+func whoIsFromResponse(whois *apitype.WhoIsResponse) (res TailscaleWhoIs, err error) {
+	if whois == nil || whois.Node == nil {
+		return res, errors.New("whois response does not contain a node")
+	}
+
 	res = TailscaleWhoIs{
 		// Node ID: use the "stable" ID, which is a string
 		NodeID: string(whois.Node.StableID),
@@ -63,9 +74,15 @@ func (t *TSNetServer) WhoIs(r *http.Request) (res TailscaleWhoIs, err error) {
 		// This is usually the Magic DNS name
 		Hostname: whois.Node.ComputedNameWithHost,
 
-		Tags:          whois.Node.Tags,
-		UserLoginName: whois.UserProfile.LoginName,
-		CapMap:        whois.CapMap,
+		Tags:   whois.Node.Tags,
+		CapMap: whois.CapMap,
+
+		// Sharer is set only on nodes shared in from another tailnet
+		Shared: !whois.Node.Sharer.IsZero(),
+	}
+
+	if whois.UserProfile != nil {
+		res.UserLoginName = whois.UserProfile.LoginName
 	}
 
 	// Addresses
