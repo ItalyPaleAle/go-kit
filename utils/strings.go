@@ -17,3 +17,25 @@ func IsTruthy(str string) bool {
 		return false
 	}
 }
+
+// HasControlChars returns true if s contains ASCII control characters (0x00-0x1F) or DEL (0x7F)
+// Other characters, including non-ASCII ones, are allowed
+func HasControlChars(s string) bool {
+	for _, c := range s {
+		if c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// IsPrintableASCII returns true if s contains only printable ASCII characters (0x20-0x7E)
+// Returns true for an empty string
+func IsPrintableASCII(s string) bool {
+	for _, c := range []byte(s) {
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+	return true
+}
