@@ -3,6 +3,7 @@ package httpserver
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -607,5 +608,62 @@ func TestUseFunc(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "mux response", rec.Body.String())
 		assert.Equal(t, "mux-value", rec.Header().Get("X-Mux-Test"))
+	})
+}
+
+func TestMiddlewareRecoverPanics(t *testing.T) {
+	errInternal := NewApiError("internal", http.StatusInternalServerError, "Internal error")
+
+	// Captures the logs sent to the default logger until the end of the test
+	captureLogs := func(t *testing.T) *strings.Builder {
+		t.Helper()
+		var buf strings.Builder
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+		return &buf
+	}
+
+	t.Run("Requests without panics are unchanged", func(t *testing.T) {
+		logs := captureLogs(t)
+		handler := MiddlewareRecoverPanics(errInternal)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		assert.Equal(t, http.StatusNoContent, rr.Code)
+		assert.Empty(t, logs.String())
+	})
+
+	t.Run("Panics are logged and the client gets the error response", func(t *testing.T) {
+		logs := captureLogs(t)
+		handler := MiddlewareRecoverPanics(errInternal)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic("simulated panic")
+		}))
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Equal(t, ContentTypeJson, rr.Header().Get(HeaderContentType)) //nolint:testifylint // False positive
+		assert.Contains(t, rr.Body.String(), `"code":"internal"`)
+
+		assert.Contains(t, logs.String(), "level=ERROR")
+		assert.Contains(t, logs.String(), "Panic while handling the request")
+		assert.Contains(t, logs.String(), "simulated panic")
+		assert.Contains(t, logs.String(), "stack=")
+	})
+
+	t.Run("http.ErrAbortHandler is re-panicked for net/http", func(t *testing.T) {
+		logs := captureLogs(t)
+		handler := MiddlewareRecoverPanics(errInternal)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic(http.ErrAbortHandler)
+		}))
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+		assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		})
+		assert.Empty(t, logs.String())
 	})
 }

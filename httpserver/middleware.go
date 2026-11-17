@@ -1,7 +1,10 @@
 package httpserver
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 )
 
 // Middleware type is a function that takes an http.Handler and returns another http.Handler
@@ -42,6 +45,35 @@ func MiddlewareHostIDHeader(hostID string) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Add(HeaderXHostID, hostID)
 			next.ServeHTTP(w, req)
+		})
+	}
+}
+
+// MiddlewareRecoverPanics is a middleware that recovers from panics in the next handlers, logs them with their stack trace, and responds with errResponse
+// The panic is logged with the default slog logger and the request's context, so the log is exported like every other log and keeps the request's trace
+// Panics with http.ErrAbortHandler are re-panicked, because handlers use them to abort a response on purpose and net/http handles them without logging
+func MiddlewareRecoverPanics(errResponse ApiError) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() { //nolint:contextcheck // The request's context is used through r
+				p := recover()
+				if p == nil {
+					return
+				}
+
+				err, ok := p.(error)
+				if ok && errors.Is(err, http.ErrAbortHandler) {
+					panic(p)
+				}
+
+				slog.ErrorContext(r.Context(), "Panic while handling the request",
+					slog.Any("panic", p),
+					slog.String("stack", string(debug.Stack())),
+				)
+				errResponse.WriteResponse(w, r)
+			}()
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }
