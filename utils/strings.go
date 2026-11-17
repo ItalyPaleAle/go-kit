@@ -2,6 +2,8 @@ package utils
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // IsTruthy returns true if a string is truthy, such as "1", "on", "yes", "true", "t", "y"
@@ -18,14 +20,19 @@ func IsTruthy(str string) bool {
 	}
 }
 
-// HasControlChars returns true if s contains ASCII control characters (0x00-0x1F) or DEL (0x7F)
-// Other characters, including non-ASCII ones, are allowed
+// HasControlChars returns true if s contains control characters, or if it isn't valid UTF-8
+// Other characters, including other non-ASCII ones, are allowed
 func HasControlChars(s string) bool {
+	if !utf8.ValidString(s) {
+		return true
+	}
+
 	for _, c := range s {
-		if c < 0x20 || c == 0x7f {
+		if unicode.In(c, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return true
 		}
 	}
+
 	return false
 }
 

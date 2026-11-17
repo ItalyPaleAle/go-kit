@@ -23,6 +23,20 @@ func TestHasControlChars(t *testing.T) {
 		{name: "tab", s: "a\tb", expected: true},
 		{name: "unit separator", s: "\x1f", expected: true},
 		{name: "DEL", s: "\x7f", expected: true},
+		{name: "no-break space", s: "a\u00a0b", expected: false},
+		{name: "emoji", s: "tsiam 👋", expected: false},
+		{name: "replacement character", s: "a\ufffdb", expected: false},
+		{name: "C1 next line", s: "a\u0085b", expected: true},
+		{name: "C1 CSI", s: "\u009b31m", expected: true},
+		{name: "right-to-left override", s: "a\u202eb", expected: true},
+		{name: "left-to-right isolate", s: "a\u2066b", expected: true},
+		{name: "zero-width space", s: "a\u200bb", expected: true},
+		{name: "byte order mark", s: "\ufeffa", expected: true},
+		{name: "line separator", s: "a\u2028b", expected: true},
+		{name: "paragraph separator", s: "a\u2029b", expected: true},
+		{name: "invalid UTF-8 CSI byte", s: "\x9b31m", expected: true},
+		{name: "invalid UTF-8", s: "a\xffb", expected: true},
+		{name: "truncated UTF-8", s: "caf\xc3", expected: true},
 	}
 
 	for _, tt := range tests {

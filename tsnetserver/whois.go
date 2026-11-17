@@ -12,6 +12,7 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// TailscaleWhoIs contains the identity of a node in the tailnet
 type TailscaleWhoIs struct {
 	NodeID              string             `json:"nodeId"`
 	Name                string             `json:"name"`
@@ -21,11 +22,11 @@ type TailscaleWhoIs struct {
 	UserLoginName       string             `json:"userLoginName,omitempty"`
 	Tags                []string           `json:"tags,omitempty"`
 	CapMap              tailcfg.PeerCapMap `json:"capMap,omitempty"`
-	Shared              bool               `json:"shared,omitempty"`
-	KeyExpired          bool               `json:"keyExpired,omitempty"`
+	Shared              bool               `json:"shared,omitzero"`
+	KeyExpired          bool               `json:"keyExpired,omitzero"`
 	KeyExpiry           time.Time          `json:"keyExpiry,omitzero"`
-	Jailed              bool               `json:"jailed,omitempty"`
-	UnsignedPeerAPIOnly bool               `json:"unsignedPeerApiOnly,omitempty"`
+	Jailed              bool               `json:"jailed,omitzero"`
+	UnsignedPeerAPIOnly bool               `json:"unsignedPeerApiOnly,omitzero"`
 }
 
 // WhoIs performs a "whois" request with the LocalClient and returns information about the node
