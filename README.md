@@ -4,8 +4,6 @@ A collection of utility packages for Go applications.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/italypaleale/go-kit.svg)](https://pkg.go.dev/github.com/italypaleale/go-kit)
 
-> ⚠️ Packages in this repository are un-versioned do not expose stable APIs. Interfaces may change at any time and for any reason.
-
 ## Packages
 
 - **config**: Utilities for loading YAML configuration files, and exposing shared application metadata such as instance IDs and OpenTelemetry resources.
