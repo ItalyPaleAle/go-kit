@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -332,4 +333,39 @@ func TestSpoolBoundedRemovesTheFileItCreated(t *testing.T) {
 	closeAndRemove(file)
 	_, err = os.Stat(name)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestFSBackendPutSizeLimit(t *testing.T) {
+	backend, err := NewFS(t.TempDir())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		size    int
+		maxSize int64
+		tooBig  bool
+	}{
+		{name: "exactly at the limit", size: 10, maxSize: 10},
+		{name: "one byte over the limit", size: 11, maxSize: 10, tooBig: true},
+		{name: "empty object with a zero limit", size: 0, maxSize: 0},
+		{name: "one byte with a zero limit", size: 1, maxSize: 0, tooBig: true},
+		{name: "no effective limit", size: 100, maxSize: math.MaxInt64},
+		{name: "negative limit", size: 0, maxSize: -1, tooBig: true},
+		{name: "larger than the copy buffer", size: 100_000, maxSize: 99_999, tooBig: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := "limit/" + strings.ReplaceAll(tt.name, " ", "-")
+			res, err := backend.Put(t.Context(), key, strings.NewReader(strings.Repeat("x", tt.size)), tt.maxSize, "")
+			if tt.tooBig {
+				require.ErrorIs(t, err, ErrTooLarge)
+				exists, err := backend.Exists(t.Context(), key)
+				require.NoError(t, err)
+				assert.False(t, exists)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, int64(tt.size), res.Size)
+		})
+	}
 }

@@ -11,6 +11,7 @@ A collection of utility packages for Go applications.
 - **config**: Utilities for loading YAML configuration files, and exposing shared application metadata such as instance IDs and OpenTelemetry resources.
 - **emailer**: Send emails using one of the supported providers.
 - **eventqueue**: A queue processor for delayed and scheduled events. Uses a binary heap for O(log N) operations, allowing you to enqueue items with a scheduled execution time and have them processed automatically when due.
+- **fsutil**: File helpers, such as writing files atomically.
 - **fsnotify**: Watches a filesystem folder for changes and batches notifications. Monitors for file create and write events, batching rapid changes within 500ms to avoid excessive notifications during bulk operations.
 - **httpserver**: Utilities for HTTP servers using the standard library. It includes a collection of middlewares and utilities for returning JSON-formatted responses and errors.
 - **httpserver/openapidoc**: Serves OpenAPI documents embedded in the binary as JSON, converting them to YAML when a client asks for that form.

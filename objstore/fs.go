@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"mime"
 	"net/url"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/italypaleale/go-kit/fsutil"
 )
 
 // Default permissions for created files and directories
@@ -264,52 +267,41 @@ func (f *FSBackend) Put(ctx context.Context, key string, body io.Reader, maxSize
 		return PutResult{}, err
 	}
 
-	// The temporary file goes in the same folder as its target, which is what keeps the rename below atomic
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
-	if err != nil {
-		return PutResult{}, fmt.Errorf("failed to create a temporary file in '%s': %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-
-	// The temporary file is removed on every path, including after a successful close, since the rename below is what makes it permanent
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-	}()
-
-	// Copying one byte past the limit is what tells an object that's exactly at the limit apart from one that's over it
-	size, err := io.Copy(tmp, io.LimitReader(body, maxSize+1))
-	if err != nil {
-		return PutResult{}, fmt.Errorf("failed to write to the temporary file '%s': %w", tmpPath, err)
-	}
-	if size > maxSize {
+	// The object is written to a temporary file next to it, which is renamed into place only once it's complete and flushed to disk
+	// The temporary file is hidden, and it's given the backend's permissions before the rename, so the object never appears with any others
+	// The reader fails once the object goes over the limit, so an object that's too large is never renamed into place
+	size, err := fsutil.WriteFileFrom(path, &maxSizeReader{r: body, remaining: maxSize}, f.fileMode, fsutil.WithTempPrefix("."+filepath.Base(path)+"."))
+	if errors.Is(err, ErrTooLarge) {
 		return PutResult{}, ErrTooLarge
-	}
-
-	// The temporary file is created readable by its owner only, and it's given the backend's permissions before the rename, so the object never appears with any others
-	err = tmp.Chmod(f.fileMode)
-	if err != nil {
-		return PutResult{}, fmt.Errorf("failed to set the permissions of the temporary file '%s': %w", tmpPath, err)
-	}
-
-	// The data is flushed before the rename, so a power loss can't leave the rename pointing at a zero-length file
-	err = tmp.Sync()
-	if err != nil {
-		return PutResult{}, fmt.Errorf("failed to flush the temporary file '%s': %w", tmpPath, err)
-	}
-
-	// The file is closed before the rename because Windows refuses to rename an open one
-	err = tmp.Close()
-	if err != nil {
-		return PutResult{}, fmt.Errorf("failed to close the temporary file '%s': %w", tmpPath, err)
-	}
-
-	err = os.Rename(tmpPath, path)
-	if err != nil {
-		return PutResult{}, fmt.Errorf("failed to move the temporary file to '%s': %w", path, err)
+	} else if err != nil {
+		return PutResult{}, fmt.Errorf("failed to write the object '%s': %w", key, err)
 	}
 
 	return PutResult{Size: size}, nil
+}
+
+// Reader that fails with ErrTooLarge as soon as more than the allowed number of bytes is read from it
+type maxSizeReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (m *maxSizeReader) Read(p []byte) (int, error) {
+	if m.remaining < 0 {
+		return 0, ErrTooLarge
+	}
+
+	// Read one byte past the limit to check if we're going over
+	if m.remaining < math.MaxInt64 && int64(len(p)) > m.remaining+1 {
+		p = p[:m.remaining+1]
+	}
+
+	n, err := m.r.Read(p)
+	m.remaining -= int64(n)
+	if m.remaining < 0 {
+		return n, ErrTooLarge
+	}
+	return n, err //nolint:wrapcheck // Callers must see io.EOF unchanged
 }
 
 // Get opens the file an object is stored in
