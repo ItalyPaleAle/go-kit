@@ -17,7 +17,7 @@ import (
 	"tailscale.com/tsnet"
 )
 
-// fakeNode is a tsnetNode that returns the configured errors and counts the calls it receives
+// fakeNode is a test double for tsnetNode
 type fakeNode struct {
 	startErr error
 	upErr    error
@@ -76,8 +76,7 @@ func TestBringUp(t *testing.T) {
 	})
 
 	t.Run("returns the error of a tsnet server that failed to start", func(t *testing.T) {
-		// tsnet rejects this configuration before starting anything, so no network is involved
-		// Calling Close on this server would panic, as it never finished starting
+		// Invalid config fails in Start without network access; calling Close here would panic
 		srv := &tsnet.Server{
 			Dir:   t.TempDir(),
 			Store: new(mem.Store),
@@ -90,7 +89,7 @@ func TestBringUp(t *testing.T) {
 }
 
 func TestNewTLSConfig(t *testing.T) {
-	// Borrow the certificate of a test server, whose client trusts it
+	// Use a test TLS server's certificate and trusted client transport
 	certSrv := httptest.NewTLSServer(http.NotFoundHandler())
 	defer certSrv.Close()
 	cert := certSrv.TLS.Certificates[0]
@@ -101,7 +100,6 @@ func TestNewTLSConfig(t *testing.T) {
 		return &cert, nil
 	}))
 
-	// Like apps that serve on these listeners, the server has no TLS configuration of its own
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -113,7 +111,6 @@ func TestNewTLSConfig(t *testing.T) {
 	}()
 	defer srv.Close() //nolint:errcheck
 
-	// Returns the protocol of a request made with the transport
 	getProto := func(t *testing.T, transport *http.Transport) string {
 		t.Helper()
 		defer transport.CloseIdleConnections()

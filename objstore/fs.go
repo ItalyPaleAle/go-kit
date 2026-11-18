@@ -267,10 +267,12 @@ func (f *FSBackend) Put(ctx context.Context, key string, body io.Reader, maxSize
 		return PutResult{}, err
 	}
 
-	// The object is written to a temporary file next to it, which is renamed into place only once it's complete and flushed to disk
-	// The temporary file is hidden, and it's given the backend's permissions before the rename, so the object never appears with any others
-	// The reader fails once the object goes over the limit, so an object that's too large is never renamed into place
-	size, err := fsutil.WriteFileFrom(path, &maxSizeReader{r: body, remaining: maxSize}, f.fileMode, fsutil.WithTempPrefix("."+filepath.Base(path)+"."))
+	// Write atomically via a temporary file, aborting with ErrTooLarge if body exceeds maxSize
+	msr := &maxSizeReader{
+		r:         body,
+		remaining: maxSize,
+	}
+	size, err := fsutil.WriteFileFrom(path, msr, f.fileMode, fsutil.WithTempPrefix("."+filepath.Base(path)+"."))
 	if errors.Is(err, ErrTooLarge) {
 		return PutResult{}, ErrTooLarge
 	} else if err != nil {
@@ -280,7 +282,7 @@ func (f *FSBackend) Put(ctx context.Context, key string, body io.Reader, maxSize
 	return PutResult{Size: size}, nil
 }
 
-// Reader that fails with ErrTooLarge as soon as more than the allowed number of bytes is read from it
+// maxSizeReader returns ErrTooLarge once more than remaining bytes are read
 type maxSizeReader struct {
 	r         io.Reader
 	remaining int64

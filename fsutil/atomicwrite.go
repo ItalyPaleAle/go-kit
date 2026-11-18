@@ -21,20 +21,17 @@ type options struct {
 	replaceEmpty bool
 }
 
-// WithTempPrefix sets the prefix of the temporary file's name
-// The temporary file is created in the destination's directory, and a crash can leave it behind, so a fixed prefix lets callers recognize leftovers and clean them up
-// The prefix must not contain path separators
-// The default prefix is "." followed by the destination's name and ".tmp-"
+// WithTempPrefix sets the prefix for the temporary file name (must not contain path separators)
+// Defaults to ".<filename>.tmp-"
 func WithTempPrefix(prefix string) Option {
 	return func(o *options) {
 		o.tempPrefix = prefix
 	}
 }
 
-// WithReplaceEmpty makes CreateFile replace an existing empty regular file, as if it didn't exist
-// This is for callers that treat an empty file as missing, such as one left behind by an earlier non-atomic write
-// Replacing an empty file isn't exclusive: when concurrent calls find the same empty file, they can all succeed, and the last one wins
-// WriteFile and WriteFileFrom ignore this option, since they always replace the file
+// WithReplaceEmpty makes CreateFile overwrite an existing empty regular file
+// Concurrent calls replacing the same empty file may all succeed (last write wins)
+// Ignored by WriteFile and WriteFileFrom
 func WithReplaceEmpty() Option {
 	return func(o *options) {
 		o.replaceEmpty = true
@@ -51,18 +48,15 @@ func newOptions(path string, opts []Option) options {
 	return o
 }
 
-// WriteFile writes data to the file at path atomically, creating it or replacing it
-// The data is written to a temporary file in the same directory and synced to disk, the temporary file is renamed to path, and then the directory is synced too, so the new file survives a crash or a power loss
-// Readers see either the previous file or the new one, never a partial write, and when an error happens before the rename, path is left untouched
-// The file's permissions are exactly perm, regardless of the umask
-// A symlink at path is replaced, and not followed
+// WriteFile writes data to path atomically by writing to a temporary file in the same directory and renaming it into place
+// Permissions are set to perm regardless of umask, and symlinks at path are replaced rather than followed
 func WriteFile(path string, data []byte, perm fs.FileMode, opts ...Option) error {
 	_, err := WriteFileFrom(path, bytes.NewReader(data), perm, opts...)
 	return err
 }
 
-// WriteFileFrom is like WriteFile, but it copies the file's contents from r, and returns the number of bytes written
-// If reading from r fails, the error is returned wrapped and path is left untouched, so r can enforce a size limit by returning an error
+// WriteFileFrom is like WriteFile, but reads data from r and returns the number of bytes written
+// If reading from r fails, path is left untouched
 func WriteFileFrom(path string, r io.Reader, perm fs.FileMode, opts ...Option) (int64, error) {
 	o := newOptions(path, opts)
 
@@ -77,7 +71,7 @@ func WriteFileFrom(path string, r io.Reader, perm fs.FileMode, opts ...Option) (
 		return 0, fmt.Errorf("failed to rename the temporary file to '%s': %w", path, err)
 	}
 
-	// The file is in place at this point, but the rename is only durable once the directory is synced
+	// Sync the parent directory so the rename is durable
 	err = SyncDir(filepath.Dir(path))
 	if err != nil {
 		return n, err
@@ -86,10 +80,8 @@ func WriteFileFrom(path string, r io.Reader, perm fs.FileMode, opts ...Option) (
 	return n, nil
 }
 
-// CreateFile writes data to the file at path atomically like WriteFile, but only if path doesn't exist yet
-// If path exists, it returns an error that wraps fs.ErrExist and leaves the file untouched
-// The temporary file is hard-linked to path, which fails when path exists, so when there are concurrent calls for the same path, exactly one succeeds
-// On filesystems that don't support hard links, it falls back to a rename, which doesn't protect against concurrent calls
+// CreateFile writes data to path atomically like WriteFile, but fails with fs.ErrExist if path already exists
+// It links the temporary file to path so only one concurrent call succeeds, falling back to rename if hard links are not supported
 func CreateFile(path string, data []byte, perm fs.FileMode, opts ...Option) error {
 	o := newOptions(path, opts)
 
@@ -98,20 +90,20 @@ func CreateFile(path string, data []byte, perm fs.FileMode, opts ...Option) erro
 		return err
 	}
 
-	// After a successful link, path is another name for the temporary file, so the temporary file is always removed
+	// Always remove the temporary file (after linking, path points to the same inode)
 	defer os.Remove(tmpPath) //nolint:errcheck
 
 	linkErr := os.Link(tmpPath, path)
 	if linkErr != nil {
-		// Find out whether the link failed because path exists, or because the filesystem doesn't support hard links
+		// Check whether path already exists or the filesystem does not support hard links
 		info, statErr := os.Lstat(path)
 		switch {
 		case statErr == nil && o.replaceEmpty && info.Mode().IsRegular() && info.Size() == 0:
-			// An empty file that the caller wants replaced
+			// Replace the existing empty file
 		case statErr == nil:
 			return fmt.Errorf("file '%s' already exists: %w", path, fs.ErrExist)
 		case errors.Is(statErr, fs.ErrNotExist) && !errors.Is(linkErr, fs.ErrExist):
-			// Hard links are not supported
+			// Fall back to rename when hard links are not supported
 		default:
 			return fmt.Errorf("failed to link the temporary file to '%s': %w", path, linkErr)
 		}
@@ -122,19 +114,18 @@ func CreateFile(path string, data []byte, perm fs.FileMode, opts ...Option) erro
 		}
 	}
 
-	// The file is in place at this point, but the new directory entry is only durable once the directory is synced
+	// Sync the parent directory so the new entry is durable
 	return SyncDir(filepath.Dir(path))
 }
 
-// SyncDir flushes a directory's entries to disk, so files that were just created, renamed, or linked in it survive a crash or a power loss
-// It does nothing on Windows, which can't open directories as files
-// It ignores the errors of filesystems that don't support syncing directories, such as some network and FUSE filesystems, since on those a rename is as durable as the filesystem makes it
+// SyncDir flushes a directory to disk
+// It is a no-op on Windows and ignores errors from filesystems that do not support syncing directories
 func SyncDir(dir string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
 
-	d, err := os.Open(dir) // #nosec G304 -- Opening the directory that the caller chose is the purpose of this function
+	d, err := os.Open(dir) // #nosec G304 -- Caller-supplied directory path
 	if err != nil {
 		return fmt.Errorf("failed to open the directory '%s' to sync it: %w", dir, err)
 	}
@@ -151,20 +142,16 @@ func SyncDir(dir string) error {
 	return nil
 }
 
-// Writes the contents of r to a new temporary file in the directory of path, and returns the temporary file's path and the number of bytes written
-// The temporary file has mode perm and is synced to disk, and on errors it's removed
+// writeTempFile writes r to a new temporary file in filepath.Dir(path), syncs it, and returns its path and byte count
 func writeTempFile(path string, r io.Reader, perm fs.FileMode, prefix string) (_ string, n int64, err error) {
-	// The temporary file must be in the same directory as path, since a rename is only atomic within a filesystem
+	// Create the temp file in the same directory as path so renaming is atomic
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, prefix+"*")
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create a temporary file in '%s': %w", dir, err)
 	}
 
-	// The path is kept in its own variable, since the error returns below reset the function's results before this deferred cleanup runs
 	tmpPath := f.Name()
-
-	// Closing a file that is already closed only returns an error, which is ignored
 	defer func() {
 		if err != nil {
 			_ = f.Close()
@@ -177,21 +164,19 @@ func writeTempFile(path string, r io.Reader, perm fs.FileMode, prefix string) (_
 		return "", 0, fmt.Errorf("failed to write the temporary file '%s': %w", tmpPath, err)
 	}
 
-	// CreateTemp creates the file with mode 0600, so the contents can't be read by other users while they're written, even if perm allows it
-	// The mode is changed through the open file and not its path, which another user with write access to the directory could replace with a symlink
-	// Setting it explicitly also undoes the umask, which could have removed some bits
+	// Set permissions on the open file descriptor to bypass umask and avoid following symlinks
 	err = f.Chmod(perm)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to set the permissions of the temporary file '%s': %w", tmpPath, err)
 	}
 
-	// The contents are flushed before the rename or link, so a power loss can't leave path pointing at an empty or partial file
+	// Flush contents to disk before renaming or linking
 	err = f.Sync()
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to sync the temporary file '%s': %w", tmpPath, err)
 	}
 
-	// The file is closed before the rename, because Windows refuses to rename an open file, and network filesystems can report a failed write only when the file is closed
+	// Close before renaming (required on Windows)
 	err = f.Close()
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to close the temporary file '%s': %w", tmpPath, err)

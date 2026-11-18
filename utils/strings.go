@@ -20,8 +20,7 @@ func IsTruthy(str string) bool {
 	}
 }
 
-// HasControlChars returns true if s contains control characters, or if it isn't valid UTF-8
-// Other characters, including other non-ASCII ones, are allowed
+// HasControlChars reports whether s contains any control characters or invalid UTF-8
 func HasControlChars(s string) bool {
 	if !utf8.ValidString(s) {
 		return true
@@ -36,8 +35,7 @@ func HasControlChars(s string) bool {
 	return false
 }
 
-// IsPrintableASCII returns true if s contains only printable ASCII characters (0x20-0x7E)
-// Returns true for an empty string
+// IsPrintableASCII reports whether s contains only printable ASCII characters (0x20-0x7E)
 func IsPrintableASCII(s string) bool {
 	for _, c := range []byte(s) {
 		if c < 0x20 || c > 0x7e {

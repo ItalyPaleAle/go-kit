@@ -94,7 +94,7 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 		}
 	}
 
-	// Bring up the Tailscale node, which also gives us its IPs
+	// Start the Tailscale node
 	state, err := bringUp(ctx, tsrv)
 	if err != nil {
 		return nil, err
@@ -119,17 +119,16 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 	return t, nil
 }
 
-// tsnetNode is the part of tsnet.Server that bringUp uses, so tests can replace it
+// tsnetNode is the subset of tsnet.Server used by bringUp
 type tsnetNode interface {
 	Start() error
 	Up(ctx context.Context) (*ipnstate.Status, error)
 	Close() error
 }
 
-// bringUp starts the node and waits until it's running
+// bringUp starts the node and waits until it is up
 func bringUp(ctx context.Context, node tsnetNode) (*ipnstate.Status, error) {
-	// Up would start the node too, but starting it separately tells apart the two failures
-	// If starting fails, tsnet has already released what it allocated, and Close must not be called: it panics on a node that didn't finish starting
+	// Call Start before Up because Close panics if Start failed
 	err := node.Start()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start Tailscale node: %w", err)
@@ -137,7 +136,6 @@ func bringUp(ctx context.Context, node tsnetNode) (*ipnstate.Status, error) {
 
 	state, err := node.Up(ctx)
 	if err != nil {
-		// Up can fail after the node started, for example when ctx is canceled while waiting for authentication
 		_ = node.Close()
 		return nil, fmt.Errorf("failed to bring up Tailscale node: %w", err)
 	}
@@ -162,9 +160,9 @@ func (t *TSNetServer) LocalClient() (*local.Client, error) {
 	return lc, nil
 }
 
-// Listen returns a TLS listener on the tailnet, which offers HTTP/2 and HTTP/1.1 through ALPN
+// Listen returns a TLS listener on the tailnet with HTTP/2 and HTTP/1.1 ALPN support
 func (t *TSNetServer) Listen(port int) (net.Listener, error) {
-	// tsnet's ListenTLS doesn't accept a TLS configuration, and its default one doesn't offer HTTP/2, so this does the same with a custom configuration
+	// Configure TLS manually because tsnet.Server.ListenTLS does not enable HTTP/2
 	st, err := t.server.Up(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Tailscale node status: %w", err)
@@ -192,7 +190,7 @@ func (t *TSNetServer) Listen(port int) (net.Listener, error) {
 	return tlsLn, nil
 }
 
-// ListenFunnel returns a TLS listener on the tailnet and on Tailscale Funnel, which offers HTTP/2 and HTTP/1.1 through ALPN
+// ListenFunnel returns a TLS listener on the tailnet and Tailscale Funnel with HTTP/2 and HTTP/1.1 ALPN support
 func (t *TSNetServer) ListenFunnel(port int) (net.Listener, error) {
 	lc, err := t.server.LocalClient()
 	if err != nil {
@@ -207,8 +205,7 @@ func (t *TSNetServer) ListenFunnel(port int) (net.Listener, error) {
 	return ln, nil
 }
 
-// Returns the TLS configuration for the listeners
-// http.Server only serves HTTP/2 on connections where ALPN negotiated it
+// newTLSConfig returns a TLS config with HTTP/2 and HTTP/1.1 ALPN protocols enabled
 func newTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *tls.Config {
 	return &tls.Config{
 		GetCertificate: getCertificate,

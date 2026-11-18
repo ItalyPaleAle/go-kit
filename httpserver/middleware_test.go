@@ -614,7 +614,6 @@ func TestUseFunc(t *testing.T) {
 func TestMiddlewareRecoverPanics(t *testing.T) {
 	errInternal := NewApiError("internal", http.StatusInternalServerError, "Internal error")
 
-	// Captures the logs sent to the default logger until the end of the test
 	captureLogs := func(t *testing.T) *strings.Builder {
 		t.Helper()
 		var buf strings.Builder

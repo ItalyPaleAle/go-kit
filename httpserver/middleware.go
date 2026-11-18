@@ -49,13 +49,12 @@ func MiddlewareHostIDHeader(hostID string) Middleware {
 	}
 }
 
-// MiddlewareRecoverPanics is a middleware that recovers from panics in the next handlers, logs them with their stack trace, and responds with errResponse
-// The panic is logged with the default slog logger and the request's context, so the log is exported like every other log and keeps the request's trace
-// Panics with http.ErrAbortHandler are re-panicked, because handlers use them to abort a response on purpose and net/http handles them without logging
+// MiddlewareRecoverPanics is a middleware that recovers from panics in downstream handlers, logs them with a stack trace, and writes errResponse
+// Panics with http.ErrAbortHandler are re-panicked so net/http can handle them
 func MiddlewareRecoverPanics(errResponse ApiError) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer func() { //nolint:contextcheck // The request's context is used through r
+			defer func() { //nolint:contextcheck // Uses r.Context()
 				p := recover()
 				if p == nil {
 					return

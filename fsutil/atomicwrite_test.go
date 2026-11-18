@@ -52,7 +52,6 @@ func TestWriteFile(t *testing.T) {
 	})
 
 	t.Run("Sets the requested file mode, regardless of the umask", func(t *testing.T) {
-		// Permission bits are not meaningful on Windows
 		if runtime.GOOS == "windows" {
 			t.Skip("skipping permission check on Windows")
 		}
@@ -108,7 +107,7 @@ func TestWriteFile(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "file")
 
-		// A reader that fails leaves the temp file in place only until writeTempFile removes it, so this checks the name through the error
+		// Check the temp file prefix in the error message
 		_, err := WriteFileFrom(path, iotest.ErrReader(errors.New("simulated")), 0o600, WithTempPrefix(".custom-"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), string(filepath.Separator)+".custom-")
@@ -116,7 +115,6 @@ func TestWriteFile(t *testing.T) {
 	})
 
 	t.Run("Leaves no temp files on failure", func(t *testing.T) {
-		// Point at a directory that doesn't exist, so CreateTemp fails before any side effects
 		dir := t.TempDir()
 		path := filepath.Join(dir, "does-not-exist", "file")
 
@@ -131,7 +129,6 @@ func TestWriteFile(t *testing.T) {
 		err := os.WriteFile(existing, []byte("preserved"), 0o600)
 		require.NoError(t, err)
 
-		// CreateTemp on a non-directory parent fails, so nothing is written
 		err = WriteFile(filepath.Join(existing, "file"), []byte("new"), 0o600)
 		require.Error(t, err)
 
@@ -187,7 +184,6 @@ func TestCreateFile(t *testing.T) {
 		assert.Equal(t, []byte("hello world"), got)
 		assert.Equal(t, []string{"file"}, listDir(t, dir), "temp file should be removed")
 
-		// Permission bits are not meaningful on Windows
 		if runtime.GOOS != "windows" {
 			assert.Equal(t, fs.FileMode(0o640), filePerm(t, path))
 		}
