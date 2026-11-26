@@ -1,6 +1,10 @@
 package tsnetserver
 
 import (
+	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"testing"
 	"time"
@@ -8,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/client/tailscale/apitype"
+	"tailscale.com/ipn"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tailcfg/peercap"
 )
@@ -92,5 +97,46 @@ func TestWhoIsFromResponse(t *testing.T) {
 
 		_, err = whoIsFromResponse(nil)
 		require.ErrorContains(t, err, "does not contain a node")
+	})
+}
+
+type testWrappedConn struct {
+	net.Conn
+}
+
+func (w testWrappedConn) NetConn() net.Conn {
+	return w.Conn
+}
+
+func TestFunnelDetectionAndWhoIsGuard(t *testing.T) {
+	t.Run("unwraps nested net.Conn layers to find FunnelConn", func(t *testing.T) {
+		var ts TSNetServer
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close() //nolint:errcheck
+		defer serverConn.Close() //nolint:errcheck
+
+		fc := &ipn.FunnelConn{
+			Conn: serverConn,
+			Src:  netip.MustParseAddrPort("203.0.113.9:54321"),
+		}
+		wrapped := testWrappedConn{testWrappedConn{fc}}
+
+		ctx := ts.ConnContextFn()(context.Background(), wrapped)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "https://example.ts.net/", nil)
+
+		assert.True(t, IsFunneledRequest(req))
+		assert.Equal(t, "203.0.113.9", FunnelClientIP(req))
+
+		_, err := ts.WhoIs(req)
+		require.ErrorContains(t, err, "WhoIs is not valid for Funnel connections")
+	})
+
+	t.Run("fails closed when Funnel is enabled without ConnContextFn", func(t *testing.T) {
+		var ts TSNetServer
+		ts.funnelEnabled.Store(true)
+
+		req := httptest.NewRequest(http.MethodGet, "https://example.ts.net/", nil)
+		_, err := ts.WhoIs(req)
+		require.ErrorContains(t, err, "ConnContextFn")
 	})
 }

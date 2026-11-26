@@ -57,21 +57,31 @@ func signalProcess(proc *os.Process, sig os.Signal) error {
 	return nil
 }
 
+// isZombieGroupErr reports whether signalProcess returned EPERM because the group contains only an unreaped zombie leader on BSD/Darwin
+func isZombieGroupErr(err error) bool {
+	return errors.Is(err, syscall.EPERM)
+}
+
 // killProcess kills every process in the process group of proc
 func killProcess(proc *os.Process) error {
 	errs := make([]error, 0, 2)
-	err := syscall.Kill(-proc.Pid, syscall.SIGKILL)
-	if err != nil && !errors.Is(err, syscall.ESRCH) {
-		errs = append(errs, err)
+	groupErr := syscall.Kill(-proc.Pid, syscall.SIGKILL)
+	if groupErr != nil && !errors.Is(groupErr, syscall.ESRCH) && !errors.Is(groupErr, syscall.EPERM) {
+		errs = append(errs, groupErr)
 	}
 
 	// Kill proc directly too, in case it moved itself to a different process group
-	err = proc.Kill()
+	err := proc.Kill()
 	if err != nil && !errors.Is(err, os.ErrProcessDone) {
 		errs = append(errs, err)
 	}
 
 	return errors.Join(errs...)
+}
+
+// cleanupProcessGroup terminates any surviving child processes in proc's process group before proc is reaped
+func cleanupProcessGroup(proc *os.Process) {
+	_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
 }
 
 // resolveCredential returns the credential to run the process as, or nil to run it as the current user

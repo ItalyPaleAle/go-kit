@@ -99,10 +99,16 @@ func parseTelegramURL(webhookURL string) (endpoint string, chat telegramChat, er
 	// Anything before "/bot<token>" is allowed, for self-hosted Bot API servers behind a reverse proxy
 	path := strings.TrimSuffix(parsed.Path, "/")
 	i := strings.LastIndexByte(path, '/')
-	if strings.EqualFold(path[i+1:], "sendMessage") {
+	if i >= 0 && strings.EqualFold(path[i+1:], "sendMessage") {
 		path = path[:i]
 	}
-	token, ok := strings.CutPrefix(path[strings.LastIndexByte(path, '/')+1:], "bot")
+
+	lastSlash := strings.LastIndexByte(path, '/')
+	if lastSlash < 0 {
+		return "", telegramChat{}, errors.New("webhook URL for Telegram must have a path like /bot<token>/sendMessage")
+	}
+
+	token, ok := strings.CutPrefix(path[lastSlash+1:], "bot")
 	if !ok || token == "" {
 		return "", telegramChat{}, errors.New("webhook URL for Telegram must have a path like /bot<token>/sendMessage")
 	}

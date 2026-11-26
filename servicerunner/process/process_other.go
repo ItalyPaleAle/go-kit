@@ -35,6 +35,10 @@ func signalProcess(proc *os.Process, sig os.Signal) error {
 	return proc.Signal(sig)
 }
 
+func isZombieGroupErr(_ error) bool {
+	return false
+}
+
 func killProcess(proc *os.Process) error {
 	err := proc.Kill()
 	if errors.Is(err, os.ErrProcessDone) {
@@ -43,6 +47,8 @@ func killProcess(proc *os.Process) error {
 
 	return err
 }
+
+func cleanupProcessGroup(_ *os.Process) {}
 
 func resolveCredential(userName string, groupName string) (*credential, error) {
 	if userName != "" || groupName != "" {

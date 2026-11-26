@@ -3,6 +3,7 @@ package objstore
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 )
 
@@ -11,12 +12,21 @@ import (
 // The backends that upload over HTTP need to know the size of the object up-front to set a Content-Length, and a temporary file is what gives them that without keeping the whole object in memory
 // Reading stops one byte past the limit, which is what tells an object that's exactly at the limit apart from one that's over it
 func spoolBounded(body io.Reader, maxSize int64) (*os.File, int64, error) {
+	if maxSize < 0 {
+		return nil, 0, ErrTooLarge
+	}
+
 	file, err := os.CreateTemp("", "objstore-upload-*")
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create the upload spool file: %w", err)
 	}
 
-	size, err := io.Copy(file, io.LimitReader(body, maxSize+1))
+	reader := body
+	if maxSize < math.MaxInt64 {
+		reader = io.LimitReader(body, maxSize+1)
+	}
+
+	size, err := io.Copy(file, reader)
 	if err != nil {
 		closeAndRemove(file)
 		return nil, 0, fmt.Errorf("failed to write the upload spool file: %w", err)

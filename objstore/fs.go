@@ -2,6 +2,8 @@ package objstore
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,11 +13,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
-
-	"github.com/italypaleale/go-kit/fsutil"
 )
 
 // Default permissions for created files and directories
@@ -255,24 +257,39 @@ func (f *FSBackend) Put(ctx context.Context, key string, body io.Reader, maxSize
 		return PutResult{}, fmt.Errorf("failed to write the object '%s': %w", key, err)
 	}
 
-	path, err := f.Path(key)
+	err = ValidateKey(key)
 	if err != nil {
 		return PutResult{}, err
 	}
+
+	relPath := filepath.FromSlash(key)
+
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return PutResult{}, fmt.Errorf("failed to open the storage root '%s': %w", f.root, err)
+	}
+	defer root.Close() //nolint:errcheck
 
 	// The folder of the object is created here rather than at startup, because a key can name folders the backend has never seen
-	dir := filepath.Dir(path)
-	err = f.mkdirAll(dir)
-	if err != nil {
-		return PutResult{}, err
+	relDir := filepath.Dir(relPath)
+	if relDir != "." {
+		err = f.mkdirAllInRoot(root, relDir)
+		if err != nil {
+			return PutResult{}, err
+		}
 	}
 
-	// Write atomically via a temporary file, aborting with ErrTooLarge if body exceeds maxSize
+	existing, err := root.Lstat(relPath)
+	if err == nil && existing.IsDir() {
+		return PutResult{}, fmt.Errorf("failed to write the object '%s': a folder is in its place", key)
+	}
+
+	// Write atomically via a temporary file inside root, aborting with ErrTooLarge if body exceeds maxSize
 	msr := &maxSizeReader{
 		r:         body,
 		remaining: maxSize,
 	}
-	size, err := fsutil.WriteFileFrom(path, msr, f.fileMode, fsutil.WithTempPrefix("."+filepath.Base(path)+"."))
+	size, err := writeFileInRoot(root, relDir, relPath, msr, f.fileMode)
 	if errors.Is(err, ErrTooLarge) {
 		return PutResult{}, ErrTooLarge
 	} else if err != nil {
@@ -280,6 +297,142 @@ func (f *FSBackend) Put(ctx context.Context, key string, body io.Reader, maxSize
 	}
 
 	return PutResult{Size: size}, nil
+}
+
+// mkdirAllInRoot creates dir and any missing parents inside root, applying f.dirMode to every newly created folder
+func (f *FSBackend) mkdirAllInRoot(root *os.Root, dir string) error {
+	info, err := root.Stat(dir)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("failed to create the folder '%s': a file is in its place", dir)
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to create the folder '%s': %w", dir, err)
+	}
+
+	parent := filepath.Dir(dir)
+	if parent != "." && parent != dir {
+		err = f.mkdirAllInRoot(root, parent)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = root.Mkdir(dir, f.dirMode)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("failed to create the folder '%s': %w", dir, err)
+	}
+
+	err = root.Chmod(dir, f.dirMode)
+	if err != nil {
+		return fmt.Errorf("failed to set the permissions of the folder '%s': %w", dir, err)
+	}
+
+	return nil
+}
+
+// writeFileInRoot writes r to a temporary file inside root and atomically renames it to relPath
+func writeFileInRoot(root *os.Root, relDir string, relPath string, r io.Reader, perm fs.FileMode) (n int64, err error) {
+	prefix := "." + filepath.Base(relPath) + "."
+	tmpFile, tmpRelPath, err := createTempInRoot(root, relDir, prefix)
+	if err != nil {
+		return 0, err
+	}
+
+	closed := false
+	defer func() {
+		if err != nil {
+			if !closed {
+				_ = tmpFile.Close()
+			}
+			_ = root.Remove(tmpRelPath)
+		}
+	}()
+
+	n, err = io.Copy(tmpFile, r)
+	if err != nil {
+		return 0, err
+	}
+
+	err = tmpFile.Chmod(perm)
+	if err != nil {
+		return 0, err
+	}
+
+	err = tmpFile.Sync()
+	if err != nil {
+		return 0, err
+	}
+
+	err = tmpFile.Close()
+	closed = true
+	if err != nil {
+		return 0, err
+	}
+
+	err = root.Rename(tmpRelPath, relPath)
+	if err != nil {
+		return 0, err
+	}
+
+	err = syncDirInRoot(root, relDir)
+	if err != nil {
+		return n, err
+	}
+
+	return n, nil
+}
+
+func createTempInRoot(root *os.Root, relDir string, prefix string) (*os.File, string, error) {
+	for range 16 {
+		var raw [8]byte
+		_, err := rand.Read(raw[:])
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to generate temporary file name: %w", err)
+		}
+
+		tmpName := prefix + hex.EncodeToString(raw[:])
+		tmpRelPath := tmpName
+		if relDir != "." {
+			tmpRelPath = filepath.Join(relDir, tmpName)
+		}
+
+		f, err := root.OpenFile(tmpRelPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		} else if err != nil {
+			return nil, "", fmt.Errorf("failed to create temporary file '%s': %w", tmpRelPath, err)
+		}
+
+		return f, tmpRelPath, nil
+	}
+
+	return nil, "", errors.New("failed to create a unique temporary file")
+}
+
+func syncDirInRoot(root *os.Root, relDir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	d, err := root.Open(relDir)
+	if err != nil {
+		return fmt.Errorf("failed to open the directory '%s' to sync it: %w", relDir, err)
+	}
+
+	err = d.Sync()
+	closeErr := d.Close()
+	if err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return fmt.Errorf("failed to sync the directory '%s': %w", relDir, err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("failed to close the directory '%s': %w", relDir, closeErr)
+	}
+
+	return nil
 }
 
 // maxSizeReader returns ErrTooLarge once more than remaining bytes are read
@@ -314,23 +467,40 @@ func (f *FSBackend) Get(ctx context.Context, key string) (io.ReadCloser, ObjectI
 		return nil, ObjectInfo{}, fmt.Errorf("failed to read the object '%s': %w", key, err)
 	}
 
-	path, err := f.Path(key)
+	err = ValidateKey(key)
 	if err != nil {
 		return nil, ObjectInfo{}, err
 	}
 
-	file, err := os.Open(path) //nolint:gosec // The path is built from a validated key, rooted in the backend's own folder
+	relPath := filepath.FromSlash(key)
+
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return nil, ObjectInfo{}, fmt.Errorf("failed to open the storage root '%s': %w", f.root, err)
+	}
+	defer root.Close() //nolint:errcheck
+
+	file, err := root.Open(relPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ObjectInfo{}, ErrNotFound
 	}
 	if err != nil {
-		return nil, ObjectInfo{}, fmt.Errorf("failed to open the file '%s': %w", path, err)
+		info, statErr := root.Stat(relPath)
+		if statErr == nil && !info.Mode().IsRegular() {
+			return nil, ObjectInfo{}, ErrNotFound
+		}
+
+		return nil, ObjectInfo{}, fmt.Errorf("failed to open the object '%s': %w", key, err)
 	}
 
 	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return nil, ObjectInfo{}, fmt.Errorf("failed to stat the file '%s': %w", path, err)
+		return nil, ObjectInfo{}, fmt.Errorf("failed to stat the object '%s': %w", key, err)
+	}
+	if !stat.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, ObjectInfo{}, ErrNotFound
 	}
 
 	return file, ObjectInfo{Size: stat.Size(), ContentType: mime.TypeByExtension(filepath.Ext(key))}, nil
@@ -342,26 +512,34 @@ func (f *FSBackend) GetConsistent(ctx context.Context, key string) (io.ReadClose
 	return f.Get(ctx, key)
 }
 
-// Exists reports whether the file an object is stored in is there, without opening it
+// Exists reports whether the regular file an object is stored in is there, without opening it
 func (f *FSBackend) Exists(ctx context.Context, key string) (bool, error) {
 	err := ctx.Err()
 	if err != nil {
 		return false, fmt.Errorf("failed to look up the object '%s': %w", key, err)
 	}
 
-	path, err := f.Path(key)
+	err = ValidateKey(key)
 	if err != nil {
 		return false, err
 	}
 
-	_, err = os.Stat(path)
+	relPath := filepath.FromSlash(key)
+
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return false, fmt.Errorf("failed to open the storage root '%s': %w", f.root, err)
+	}
+	defer root.Close() //nolint:errcheck
+
+	stat, err := root.Stat(relPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
-		return false, fmt.Errorf("failed to stat the file '%s': %w", path, err)
+		return false, fmt.Errorf("failed to stat the object '%s': %w", key, err)
 	}
 
-	return true, nil
+	return stat.Mode().IsRegular(), nil
 }
 
 // Delete removes the file an object is stored in, and does nothing if it doesn't exist
@@ -371,14 +549,29 @@ func (f *FSBackend) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("failed to remove the object '%s': %w", key, err)
 	}
 
-	path, err := f.Path(key)
+	err = ValidateKey(key)
 	if err != nil {
 		return err
 	}
 
-	err = os.Remove(path)
+	relPath := filepath.FromSlash(key)
+
+	root, err := os.OpenRoot(f.root)
+	if err != nil {
+		return fmt.Errorf("failed to open the storage root '%s': %w", f.root, err)
+	}
+	defer root.Close() //nolint:errcheck
+
+	info, err := root.Lstat(relPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err == nil && info.IsDir() {
+		return nil
+	}
+
+	err = root.Remove(relPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("failed to remove the file '%s': %w", path, err)
+		return fmt.Errorf("failed to remove the object '%s': %w", key, err)
 	}
 
 	return nil

@@ -39,3 +39,35 @@ func TestFormatFromAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEmailAddressAndHeaderValue(t *testing.T) {
+	err := ValidateEmailAddress("recipient address", "user@example.com")
+	require.NoError(t, err)
+
+	err = ValidateEmailAddress("recipient address", "user+tag@sub.example.com")
+	require.NoError(t, err)
+
+	invalidAddrs := []struct {
+		name string
+		addr string
+	}{
+		{name: "CRLF in RFC 5322 comment", addr: "user@example.com (\r\nBcc: attacker@evil.example)"},
+		{name: "display name with angle brackets", addr: "Attacker <user@example.com>"},
+		{name: "comment without CRLF", addr: "user@example.com (comment)"},
+		{name: "surrounding whitespace", addr: " user@example.com "},
+		{name: "control char", addr: "user\x00@example.com"},
+		{name: "multiple addresses", addr: "a@example.com, b@example.com"},
+	}
+	for _, tc := range invalidAddrs {
+		t.Run(tc.name, func(t *testing.T) {
+			vErr := ValidateEmailAddress("recipient address", tc.addr)
+			require.Error(t, vErr)
+		})
+	}
+
+	err = ValidateHeaderValue("subject", "Normal UTF-8 subject")
+	require.NoError(t, err)
+
+	err = ValidateHeaderValue("subject", "Line 1\r\nBcc: attacker@evil.example")
+	require.ErrorContains(t, err, "must not contain CR or LF characters")
+}

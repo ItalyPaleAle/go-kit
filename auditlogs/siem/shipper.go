@@ -31,6 +31,9 @@ const (
 
 	// nudgeBatchWindow is how long the loop holds a nudge before reading, so a burst of inserts ships as one batch instead of one request per event
 	nudgeBatchWindow = 1500 * time.Millisecond
+
+	// maxSameCursorCASLosses caps consecutive SetPosition compare-and-swap misses on an unchanged cursor within one flush
+	maxSameCursorCASLosses = 3
 )
 
 // errBatchTooLarge signals that the collector rejected the body as too large
@@ -93,6 +96,9 @@ type ShipperOptions struct {
 	// AllowPrivateIPs permits the collector to resolve to a private or otherwise non-routable address
 	// When this is false and a proxy is configured in the environment, the check applies to the proxy's address instead of the collector's, and a warning is logged
 	AllowPrivateIPs bool
+
+	// AllowTailscaleIPs permits the collector to resolve to Tailscale's CGNAT (100.64.0.0/10) and ULA (fd7a:115c:a1e0::/48) ranges while keeping all other private and non-routable ranges blocked
+	AllowTailscaleIPs bool
 
 	// Metrics receives the shipper's observability signals
 	// Optional
@@ -201,8 +207,9 @@ func NewShipper(opts ShipperOptions) (*Shipper, error) {
 			return http.ErrUseLastResponse
 		},
 		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{
-			AllowPrivateIPs: opts.AllowPrivateIPs,
-			Logger:          opts.Logger,
+			AllowPrivateIPs:   opts.AllowPrivateIPs,
+			AllowTailscaleIPs: opts.AllowTailscaleIPs,
+			Logger:            opts.Logger,
 		})),
 	}
 
@@ -312,6 +319,10 @@ func (s *Shipper) Run(ctx context.Context) error {
 func (s *Shipper) drain(ctx context.Context) error {
 	// The backlog gauge is sampled once per flush, at the point where it is most meaningful: how far behind the cursor was when this flush started
 	sampleBacklog := true
+	var (
+		lastCASLossPos Position
+		samePosLosses  int
+	)
 
 	for {
 		pos, err := s.store.GetPosition(ctx)
@@ -355,6 +366,11 @@ func (s *Shipper) drain(ctx context.Context) error {
 		// The cursor tracks what has been considered, not what has been sent, so a filtered-out event advances it too
 		// Otherwise a narrow filter would permanently pin the retention clamp on the caller's side
 		next := events[len(events)-1].Position
+		if next == pos {
+			s.log.ErrorContext(ctx, "Audit event batch did not advance the stream cursor, aborting flush")
+			return nil
+		}
+
 		kept := s.applyFilter(events)
 
 		if len(kept) > 0 {
@@ -378,12 +394,24 @@ func (s *Shipper) drain(ctx context.Context) error {
 			return nil
 		}
 		if !ok {
+			if samePosLosses > 0 && pos == lastCASLossPos {
+				samePosLosses++
+			} else {
+				lastCASLossPos = pos
+				samePosLosses = 1
+			}
+			if samePosLosses >= maxSameCursorCASLosses {
+				s.log.ErrorContext(ctx, "Audit stream cursor compare-and-swap failed repeatedly without advancing, aborting flush")
+				return nil
+			}
+
 			// Another replica advanced the cursor first
 			// Its batch overlapped with ours, which at-least-once delivery already accounts for
 			// Re-read and continue from wherever it left off
 			s.log.DebugContext(ctx, "Audit stream cursor was advanced concurrently, re-reading")
 			continue
 		}
+		samePosLosses = 0
 
 		s.reportLag(ctx, next)
 
@@ -456,6 +484,7 @@ func (s *Shipper) deliver(ctx context.Context, pos Position, events []Event) (er
 			if !shrunk {
 				// The batch is already a single event, so re-reading would produce the same body
 				// Pause at the ceiling so a collector that refuses every event cannot turn into a hot loop
+				s.failureStreak++
 				err = s.waitAfterFailure(ctx, pos, events[0].Position, jitter(backoffCap))
 				if err != nil {
 					return err
@@ -552,17 +581,17 @@ func (s *Shipper) onSuccess(ctx context.Context, count int, attempt int) {
 	s.stalledSince = time.Time{}
 }
 
-// shrinkBatch halves the batch size, down to a floor of 1, and reports whether it could
+// shrinkBatch halves the batch size based on how many events were sent, down to a floor of 1, and reports whether it could
 // The size only ever shrinks: growing it back would rediscover the cap on every batch
 func (s *Shipper) shrinkBatch(ctx context.Context, count int) bool {
-	if s.batchSize <= MinBatchSize {
+	if count <= MinBatchSize || s.batchSize <= MinBatchSize {
 		s.log.ErrorContext(ctx, "The collector rejected a single audit event as too large, the feed is stalled",
 			slog.Int("events", count),
 		)
 		return false
 	}
 
-	s.batchSize = max(s.batchSize/2, MinBatchSize)
+	s.batchSize = max(min(s.batchSize, count)/2, MinBatchSize)
 	s.log.WarnContext(ctx, "The collector rejected an audit event batch as too large, reducing the batch size",
 		slog.Int("events", count),
 		slog.Int("batchSize", s.batchSize),

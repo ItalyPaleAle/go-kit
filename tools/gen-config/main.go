@@ -83,9 +83,13 @@ func generateFromStruct(configStruct string, yamlDest string, mdDest string, doc
 	processStruct(structTypes["Config"], "", "", "", outYAML, outMD, false)
 
 	if docsDest != "" {
-		// Replace the configuration table in the docs file file
+		// Replace the configuration table in the docs file
 		fmt.Fprintf(os.Stderr, "Updating docs in '%s'\n", docsDest)
-		readme, err := os.ReadFile(docsDest)
+		info, err := os.Stat(docsDest)
+		if err != nil {
+			return err
+		}
+		readme, err := os.ReadFile(docsDest) //nolint:gosec // Tool invoked with caller-selected docs path
 		if err != nil {
 			return err
 		}
@@ -94,19 +98,32 @@ func generateFromStruct(configStruct string, yamlDest string, mdDest string, doc
 			beginMarker = "<!-- BEGIN CONFIG TABLE -->"
 			endMarker   = "<!-- END CONFIG TABLE -->"
 		)
-		begin := bytes.Index(readme, []byte(beginMarker)) + len(beginMarker)
-		end := bytes.Index(readme, []byte(endMarker))
+		beginIdx := bytes.Index(readme, []byte(beginMarker))
+		if beginIdx < 0 {
+			return fmt.Errorf("missing %q marker in '%s'", beginMarker, docsDest)
+		}
+		begin := beginIdx + len(beginMarker)
 
-		readmeFile, err := os.Create(docsDest)
+		end := bytes.Index(readme, []byte(endMarker))
+		if end < 0 {
+			return fmt.Errorf("missing %q marker in '%s'", endMarker, docsDest)
+		}
+		if end < begin {
+			return fmt.Errorf("marker %q appears before %q in '%s'", endMarker, beginMarker, docsDest)
+		}
+
+		var updated bytes.Buffer
+		updated.Grow(begin + outBufMD.Len() + len(readme) - end + 2)
+		updated.Write(readme[:begin])
+		updated.WriteByte('\n')
+		updated.Write(outBufMD.Bytes())
+		updated.WriteByte('\n')
+		updated.Write(readme[end:])
+
+		err = os.WriteFile(docsDest, updated.Bytes(), info.Mode().Perm()) //nolint:gosec // Preserves the target docs file permissions
 		if err != nil {
 			return err
 		}
-		defer readmeFile.Close()
-		_, _ = readmeFile.Write(readme[:begin])
-		_, _ = readmeFile.Write([]byte{'\n'})
-		_, _ = io.Copy(readmeFile, outBufMD)
-		_, _ = readmeFile.Write([]byte{'\n'})
-		_, _ = readmeFile.Write(readme[end:])
 	}
 
 	return nil

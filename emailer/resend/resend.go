@@ -60,7 +60,12 @@ func (r *ResendEmailer) Init(ctx context.Context, opts internal.InitOpts) error 
 		return fmt.Errorf("invalid connection string: missing from address; required format is '%s'", connStringFormat)
 	}
 
-	err := internal.ValidateEmailAddress("from address", fromAddress)
+	err := internal.ValidateHeaderValue("from name", fromName)
+	if err != nil {
+		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
+	}
+
+	err = internal.ValidateEmailAddress("from address", fromAddress)
 	if err != nil {
 		return fmt.Errorf("invalid connection string: %w; required format is '%s'", err, connStringFormat)
 	}
@@ -74,7 +79,17 @@ func (r *ResendEmailer) Init(ctx context.Context, opts internal.InitOpts) error 
 
 // SendEmail sends an email using Resend
 func (r *ResendEmailer) SendEmail(ctx context.Context, to internal.EmailAddress, subject string, message internal.SendEmailMessage) error {
-	err := internal.ValidateEmailAddress("recipient address", to.Address)
+	err := internal.ValidateHeaderValue("recipient name", to.Name)
+	if err != nil {
+		return err
+	}
+
+	err = internal.ValidateEmailAddress("recipient address", to.Address)
+	if err != nil {
+		return err
+	}
+
+	err = internal.ValidateHeaderValue("subject", subject)
 	if err != nil {
 		return err
 	}

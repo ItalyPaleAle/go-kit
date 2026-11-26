@@ -18,10 +18,13 @@ var internalAddresses = []struct {
 }{
 	{name: "loopback ipv4", address: "127.0.0.1:443"},
 	{name: "private ipv4", address: "10.0.0.25:443"},
+	{name: "cgnat ipv4", address: "100.64.0.1:443"},
+	{name: "alibaba imds ipv4", address: "100.100.100.200:80"},
 	{name: "link local ipv4", address: "169.254.169.254:80"},
 	{name: "documentation ipv4", address: "198.51.100.25:443"},
 	{name: "loopback ipv6", address: "[::1]:443"},
 	{name: "link local ipv6", address: "[fe80::1]:443"},
+	{name: "tailscale ula ipv6", address: "[fd7a:115c:a1e0::1]:443"},
 }
 
 func TestRefusesInternalIPsByDefault(t *testing.T) {
@@ -125,4 +128,23 @@ func TestAllowsPublicIPs(t *testing.T) {
 	err := controlBlockPrivateIPs("tcp", "93.184.216.34:443", nil)
 
 	require.NoError(t, err)
+}
+
+func TestAllowTailscaleIPs(t *testing.T) {
+	hook := newControlBlockPrivateIPs(true)
+
+	err := hook("tcp", "100.64.1.5:443", nil)
+	require.NoError(t, err)
+
+	err = hook("tcp", "[fd7a:115c:a1e0::1]:443", nil)
+	require.NoError(t, err)
+
+	// Other private addresses remain blocked when only Tailscale IPs are allowed
+	err = hook("tcp", "10.0.0.1:443", nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "refusing to dial private/internal IP")
+
+	err = hook("tcp", "169.254.169.254:80", nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "refusing to dial private/internal IP")
 }

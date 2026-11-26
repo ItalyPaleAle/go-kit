@@ -21,6 +21,9 @@ type Options struct {
 	// Note: When a proxy is configured in the environment, the block applies to the proxy's address rather than the destination
 	AllowPrivateIPs bool
 
+	// AllowTailscaleIPs lifts the block specifically for Tailscale's CGNAT (100.64.0.0/10) and ULA (fd7a:115c:a1e0::/48) ranges while keeping all other private and non-routable ranges blocked
+	AllowTailscaleIPs bool
+
 	// Defaults to slog.Default()
 	Logger *slog.Logger
 }
@@ -28,6 +31,7 @@ type Options struct {
 // New returns an http.Transport for posting to an operator-configured endpoint
 //
 // Unless Options.AllowPrivateIPs is set, the dialer refuses to connect to private or otherwise non-routable addresses
+// Tailscale ranges permitted when Options.AllowTailscaleIPs is set
 // net.Dialer.Control runs after the hostname is resolved to an IP and before the connect syscall, which means:
 //  1. it sees the IP that is about to be connected to, so there is no TOCTOU window between the check and the connection
 //  2. it runs for every A/AAAA candidate in a multi-address result, so a mixed public/private DNS response cannot slip a private address through
@@ -38,7 +42,7 @@ func New(opts Options) *http.Transport {
 	}
 
 	if !opts.AllowPrivateIPs {
-		dialer.Control = controlBlockPrivateIPs
+		dialer.Control = newControlBlockPrivateIPs(opts.AllowTailscaleIPs)
 
 		proxyEnv := proxyEnvVar()
 		if proxyEnv != "" {
@@ -75,8 +79,19 @@ func proxyEnvVar() string {
 	return ""
 }
 
-// controlBlockPrivateIPs is the net.Dialer.Control hook that refuses a connection to a non-routable address
-func controlBlockPrivateIPs(network string, address string, _ syscall.RawConn) error {
+// newControlBlockPrivateIPs returns a net.Dialer.Control hook that refuses connections to non-routable addresses
+func newControlBlockPrivateIPs(allowTailscaleIPs bool) func(string, string, syscall.RawConn) error {
+	return func(network string, address string, rawConn syscall.RawConn) error {
+		return checkDialAddress(network, address, rawConn, allowTailscaleIPs)
+	}
+}
+
+// controlBlockPrivateIPs is the default net.Dialer.Control hook with Tailscale addresses blocked
+func controlBlockPrivateIPs(network string, address string, rawConn syscall.RawConn) error {
+	return checkDialAddress(network, address, rawConn, false)
+}
+
+func checkDialAddress(_ string, address string, _ syscall.RawConn, allowTailscaleIPs bool) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return fmt.Errorf("invalid dial address %q: %w", address, err)
@@ -90,6 +105,9 @@ func controlBlockPrivateIPs(network string, address string, _ syscall.RawConn) e
 	}
 
 	if iputils.IsPrivateIP(ip) {
+		if allowTailscaleIPs && iputils.IsTailscaleIP(ip) {
+			return nil
+		}
 		return fmt.Errorf("refusing to dial private/internal IP %s: SSRF protection", ip)
 	}
 

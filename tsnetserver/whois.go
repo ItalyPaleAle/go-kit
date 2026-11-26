@@ -32,10 +32,16 @@ type TailscaleWhoIs struct {
 // WhoIs performs a "whois" request with the LocalClient and returns information about the node
 // WhoIs is only valid for direct tailnet connections
 // For Funnel connections the remote address is the relay, not the real client (use FunnelClientIP instead)
+// When ListenFunnel is used, http.Server.ConnContext must be set to ConnContextFn
 func (t *TSNetServer) WhoIs(r *http.Request) (res TailscaleWhoIs, err error) {
 	// Reject Funnel requests: r.RemoteAddr is the relay address, not the real client
 	if IsFunneledRequest(r) {
 		return res, errors.New("WhoIs is not valid for Funnel connections; use FunnelClientIP to get the real client address")
+	}
+
+	// Fail closed when Funnel is active on this server and ConnContextFn was not wired onto http.Server
+	if t.funnelEnabled.Load() && !hasConnContext(r) {
+		return res, errors.New("WhoIs requires http.Server.ConnContext to be set to ConnContextFn when ListenFunnel is enabled")
 	}
 
 	// Get the remote address from the request
@@ -59,7 +65,15 @@ func (t *TSNetServer) WhoIs(r *http.Request) (res TailscaleWhoIs, err error) {
 		return res, fmt.Errorf("failed to query Tailscale whois: %w", err)
 	}
 
-	return whoIsFromResponse(whois)
+	res, err = whoIsFromResponse(whois)
+	if err != nil {
+		return TailscaleWhoIs{}, err
+	}
+	if res.UnsignedPeerAPIOnly {
+		return TailscaleWhoIs{}, errors.New("whois resolved to an unsigned PeerAPI-only node")
+	}
+
+	return res, nil
 }
 
 // Converts the response from the LocalAPI whois call

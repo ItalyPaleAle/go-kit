@@ -313,6 +313,28 @@ func TestVercelBlobCreateDirectUpload(t *testing.T) {
 	assert.Equal(t, int64(1024), claims.MaximumSizeInBytes)
 	assert.Equal(t, []string{"image/jpeg"}, claims.AllowedContentTypes)
 	assert.Greater(t, claims.ValidUntil, time.Now().UnixMilli())
+
+	// Empty contentType omits AllowedContentTypes and X-Content-Type rather than encoding [""]
+	noType, err := backend.CreateDirectUpload(t.Context(), "wf1.jpg", 512, "", 15*time.Minute)
+	require.NoError(t, err)
+	_, hasHeader := noType.Headers["X-Content-Type"]
+	assert.False(t, hasHeader)
+
+	noTypeToken := strings.TrimPrefix(noType.Headers["Authorization"], "Bearer ")
+	noTypeSecured, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(noTypeToken, "vercel_blob_client_storeid_"))
+	require.NoError(t, err)
+	_, noTypePayloadEncoded, found := strings.Cut(string(noTypeSecured), ".")
+	require.True(t, found)
+	noTypePayload, err := base64.StdEncoding.DecodeString(noTypePayloadEncoded)
+	require.NoError(t, err)
+	assert.NotContains(t, string(noTypePayload), "allowedContentTypes")
+	assert.Contains(t, string(noTypePayload), `"maximumSizeInBytes":512`)
+
+	_, err = backend.CreateDirectUpload(t.Context(), "wf1.jpg", 0, "image/jpeg", 15*time.Minute)
+	require.Error(t, err)
+
+	_, err = backend.CreateDirectUpload(t.Context(), "wf1.jpg", 1024, "image/jpeg", 0)
+	require.Error(t, err)
 }
 
 func TestVercelBlobDescription(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
@@ -18,10 +19,11 @@ import (
 
 // TSNetServer wraps a tsnet.Server for use in the application
 type TSNetServer struct {
-	server   *tsnet.Server
-	hostname string
-	ip4      string
-	ip6      string
+	server        *tsnet.Server
+	hostname      string
+	ip4           string
+	ip6           string
+	funnelEnabled atomic.Bool
 }
 
 // NewTSNetServerOpts contains options for NewTSNetServer
@@ -191,6 +193,7 @@ func (t *TSNetServer) Listen(port int) (net.Listener, error) {
 }
 
 // ListenFunnel returns a TLS listener on the tailnet and Tailscale Funnel with HTTP/2 and HTTP/1.1 ALPN support
+// Configure http.Server.ConnContext with ConnContextFn so Funnel requests are tagged in the request context
 func (t *TSNetServer) ListenFunnel(port int) (net.Listener, error) {
 	lc, err := t.server.LocalClient()
 	if err != nil {
@@ -202,6 +205,7 @@ func (t *TSNetServer) ListenFunnel(port int) (net.Listener, error) {
 		return nil, fmt.Errorf("failed to create tsnet funnel listener: %w", err)
 	}
 
+	t.funnelEnabled.Store(true)
 	return ln, nil
 }
 

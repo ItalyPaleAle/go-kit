@@ -272,6 +272,87 @@ func TestS3CreateDirectUpload(t *testing.T) {
 	assert.Contains(t, upload.URL, "X-Amz-Expires=900")
 	assert.Contains(t, upload.URL, "/bucket/images/site/image.webp")
 	assert.Contains(t, upload.URL, "X-Amz-Signature=")
+
+	// When contentType is empty, no empty Content-Type header is returned
+	noType, err := backend.CreateDirectUpload(t.Context(), "site/image.webp", 1024, "", 15*time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, noType.Headers)
+
+	_, err = backend.CreateDirectUpload(t.Context(), "site/image.webp", 0, "image/webp", 15*time.Minute)
+	require.Error(t, err)
+
+	_, err = backend.CreateDirectUpload(t.Context(), "site/image.webp", 1024, "image/webp", 0)
+	require.Error(t, err)
+
+	_, err = backend.CreateDirectUpload(t.Context(), "site/image.webp", 1024, "image/webp", 8*24*time.Hour)
+	require.Error(t, err)
+
+	_, err = backend.CreateDirectUpload(t.Context(), "site/image.webp", 1024, "image/webp\r\nX-Injected: 1", 15*time.Minute)
+	require.Error(t, err)
+}
+
+func TestS3PresignedSignatureMatchesAWSCanonicalRequest(t *testing.T) {
+	backend, err := newS3BackendFromDSN("s3://AKIAEXAMPLE:wJalrXUtnFEMI%2FK7MDENG%2FbPxRfiCYEXAMPLEKEY@s3.us-east-1.amazonaws.com/my-bucket?prefix=uploads&sessionToken=tok~with%2Bplus%20space")
+	require.NoError(t, err)
+
+	signed, err := backend.presignedURL(http.MethodPut, "user@example.com/a+b (1).webp", "image/webp;  charset=utf-8", 5*time.Minute)
+	require.NoError(t, err)
+
+	parsed, err := url.Parse(signed)
+	require.NoError(t, err)
+
+	// CanonicalURI must begin with a leading slash and percent-encode RFC 3986 sub-delimiters and spaces as %20
+	assert.Equal(t, "/my-bucket/uploads/user%40example.com/a%2Bb%20%281%29.webp", parsed.EscapedPath())
+	// Tilde stays unescaped and spaces become %20 rather than +
+	assert.Contains(t, parsed.RawQuery, "tok~with%2Bplus%20space")
+	assert.NotContains(t, parsed.RawQuery, "+")
+
+	// Recompute the SigV4 signature from the wire URL to ensure server-side verification succeeds
+	q := parsed.Query()
+	gotSig := q.Get("X-Amz-Signature")
+	amzDate := q.Get("X-Amz-Date")
+	q.Del("X-Amz-Signature")
+
+	dateStamp := amzDate[:8]
+	scope := dateStamp + "/us-east-1/s3/aws4_request"
+	canonicalReq := strings.Join([]string{
+		http.MethodPut,
+		parsed.EscapedPath(),
+		canonicalQuery(q),
+		"content-type:image/webp; charset=utf-8\nhost:s3.us-east-1.amazonaws.com\n",
+		"content-type;host",
+		"UNSIGNED-PAYLOAD",
+	}, "\n")
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		s3HexSHA256(canonicalReq),
+	}, "\n")
+	wantSig := s3HexHMAC(backend.signingKey(dateStamp), stringToSign)
+	assert.Equal(t, wantSig, gotSig)
+}
+
+func s3HexSHA256(s string) string {
+	const hexDigits = "0123456789abcdef"
+	sum := sha256Bytes([]byte(s))
+	out := make([]byte, len(sum)*2)
+	for i, b := range sum {
+		out[i*2] = hexDigits[b>>4]
+		out[i*2+1] = hexDigits[b&0x0f]
+	}
+	return string(out)
+}
+
+func s3HexHMAC(key []byte, data string) string {
+	const hexDigits = "0123456789abcdef"
+	sum := hmacBytes(key, []byte(data))
+	out := make([]byte, len(sum)*2)
+	for i, b := range sum {
+		out[i*2] = hexDigits[b>>4]
+		out[i*2+1] = hexDigits[b&0x0f]
+	}
+	return string(out)
 }
 
 // A failed request carries the signature and the session token in its URL, so they must not reach a log

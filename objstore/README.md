@@ -1,8 +1,6 @@
 # objstore
 
-A small object store abstraction for Go, over the local file system, S3 (and S3-compatible stores), and Vercel Blob.
-
-A backend is created from a single DSN, so which store a program uses is a configuration value rather than a build-time decision, and objects are addressed by an opaque key that means the same thing in every backend. The backends talk to their providers over plain HTTP and sign their own requests, so the package depends on nothing outside the standard library.
+Object store abstraction over the local file system, S3 (and S3-compatible stores), and Vercel Blob, using only the Go standard library.
 
 ```go
 store, err := objstore.New("s3://key:secret@s3.us-east-1.amazonaws.com/bucket?prefix=images", objstore.Options{})
@@ -16,29 +14,23 @@ result, err := store.Put(ctx, "site/photo.webp", body, maxSize, "image/webp")
 ## Connection strings
 
 | Backend | DSN |
-|---|---|
-| Local file system | `/path/to/folder`, `fs:/path/to/folder`, or `local:/path/to/folder`, each optionally followed by `?fileMode=<octal>&dirMode=<octal>` |
-| S3, or an S3-compatible store | `s3://<access-key>:<secret-key>@s3.<region>.amazonaws.com/<bucket>?prefix=<key-prefix>&sessionToken=<token>&publicUrl=<base-url>` |
-| Vercel Blob, with a read-write token | `vercelblob:?tokenEnv=<environment-variable>&access=<private\|public>&prefix=<key-prefix>` |
-| Vercel Blob, with OIDC | `vercelblob:?auth=oidc&storeIdEnv=<environment-variable>&access=<private\|public>&prefix=<key-prefix>` |
+| --- | --- |
+| Local file system | `/path/to/folder`, `fs:/path/to/folder`, or `local:/path/to/folder` (optional: `?fileMode=0644&dirMode=0755`) |
+| S3 / S3-compatible | `s3://<access-key>:<secret-key>@<host>/<bucket>?region=<region>&prefix=<prefix>&sessionToken=<token>&publicUrl=<https-url>` |
+| Vercel Blob (token) | `vercelblob:?tokenEnv=<env-var>&access=<private\|public>&prefix=<prefix>` |
+| Vercel Blob (OIDC) | `vercelblob:?auth=oidc&storeIdEnv=<env-var>&access=<private\|public>&prefix=<prefix>` |
 
-A DSN with no scheme at all is a file system path, and a single-character scheme is read as a Windows drive letter rather than as a backend.
+- Plain paths without a scheme (including Windows drive paths such as `C:\data`) select the local file system backend.
+- `prefix` is prepended by the backend to every object key automatically.
+- Local file system permissions default to `0600` for files (minimum `0600`) and `0750` for newly created folders (minimum `0700`), bypassing `umask`. Existing folders keep their permissions.
+- On S3, `region` can be omitted when the host has the `s3.<region>.amazonaws.com` form.
+- On Vercel Blob, `access` defaults to `private`, and `tokenEnv` defaults to `BLOB_READ_WRITE_TOKEN`. In OIDC mode, tokens are resolved per operation from `verceloidc.WithToken(ctx, ...)` first and then from `oidcTokenEnv` or `VERCEL_OIDC_TOKEN`.
 
-The `prefix` option is the backend's own concern: it's applied to every key on the way to the provider, so callers pass logical keys and never have to know whether a prefix is in play.
+## Interfaces and behavior
 
-The file system backend creates files with permissions `0600` and folders with `0750` by default. To change that, use the "query string" parameters `fileMode` and `dirMode` change that, for example `fs:/srv/images?fileMode=0644&dirMode=0755`. The permissions are set on every file as it's written and on every folder the backend creates, whatever the process's umask, while folders that already exist keep theirs. Files need at least `0600` and folders `0700`.
-
-## What a backend does
-
-Every backend implements `Backend`, which includes `Put`, `Get`, `Delete`. There are also two optional methods:
-
-- `PublicAddressingBackend` reports whether objects are served from stable URLs. When they are, `Put` returns the URL of the object it wrote, and a program can hand that URL out instead of proxying the object itself. S3 answers yes when the DSN configures a `publicUrl`, and Vercel Blob when the store is `public`.
-- `DirectUploadBackend` issues a short-lived, single-key upload target, so a browser can upload straight to the store and the body never travels through the process that authorized it. S3 signs a presigned `PUT`. Vercel Blob signs a client token, which needs the read-write token that OIDC authentication doesn't have. The file system has no such target and returns `ErrDirectUploadUnsupported`.
-
-Both are implemented by every backend in this package, so a type assertion always succeeds and the answer is in the return value.
-
-## Notes
-
-- Writes replace whatever is at the key already, and deletes of a key that doesn't exist succeed, so an operation that's retried after a failure lands in the same place.
-- The two HTTP backends spool a bounded body to a temporary file before sending it, which is what lets them declare a `Content-Length` without holding the whole object in memory. Reading stops one byte past the limit, so an object exactly at the limit is told apart from one over it.
-- A Vercel OIDC token is resolved for every operation rather than captured once, because it expires while a process keeps running. It's read from the request context first (attach it with `verceloidc.WithToken`) and from the environment after that.
+- `Backend` provides `Put`, `Get`, `GetConsistent`, `Exists`, `Delete`, and `Description`. `Put` overwrites existing objects and returns `ErrTooLarge` if the body exceeds `maxSize`. HTTP backends spool uploads to a temporary file so `Content-Length` is set without buffering the full body in memory. `Delete` succeeds if the key does not exist.
+- `PublicAddressingBackend` (`HasPublicAddressing`, `PublicURL`) is implemented by all backends and enabled when S3 sets `publicUrl` or Vercel Blob uses `access=public`. When enabled, `Put` also populates `PutResult.URL`.
+- `DirectUploadBackend` (`SupportsDirectUpload`, `CreateDirectUpload`) is implemented by all backends for browser/client direct uploads:
+  - S3 returns a presigned `PUT` URL scoped to the key, content type, and TTL (`maxSize` cannot be enforced server-side by S3 `PUT`).
+  - Vercel Blob returns a signed client upload token enforcing key, content type, `maxSize`, and TTL (requires read-write token auth).
+  - Local file system and Vercel Blob with OIDC return `ErrDirectUploadUnsupported`.

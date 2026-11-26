@@ -221,6 +221,63 @@ func TestStop(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, stdout.String())
 	})
+
+	t.Run("cleans up background child processes when the leader exits on its own", func(t *testing.T) {
+		dir := t.TempDir()
+		pidFile := filepath.Join(dir, "child.pid")
+
+		errCh := startService(t, t.Context(),
+			shell(`sleep 60 </dev/null >/dev/null 2>&1 & echo $! > child.pid; exit 0`),
+			WithWorkingDirectory(dir),
+			WithRestart(RestartNever),
+		)
+
+		err := waitForResult(t, errCh)
+		require.NoError(t, err)
+
+		rawPid, err := os.ReadFile(pidFile) //nolint:gosec // Test-created path
+		require.NoError(t, err)
+		childPid, err := strconv.Atoi(strings.TrimSpace(string(rawPid)))
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			killErr := syscall.Kill(childPid, 0)
+			return killErr != nil
+		}, 2*time.Second, 10*time.Millisecond)
+	})
+
+	t.Run("kills surviving group members that ignore SIGTERM after leader exits", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		dir := t.TempDir()
+		pidFile := filepath.Join(dir, "child.pid")
+		stdout := &syncBuffer{}
+
+		errCh := startService(t, ctx,
+			shell(`(trap '' TERM; exec sleep 60 </dev/null >/dev/null 2>&1) & echo $! > child.pid; trap 'exit 0' TERM; echo ready; while :; do sleep 0.05; done`),
+			WithWorkingDirectory(dir),
+			WithStdout(stdout),
+			WithShutdownGraceTimeout(200*time.Millisecond),
+		)
+
+		stdout.waitForCount(t, "ready", 1)
+		cancel()
+
+		err := waitForResult(t, errCh)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "did not stop gracefully and was killed")
+
+		rawPid, err := os.ReadFile(pidFile) //nolint:gosec // Test-created path
+		require.NoError(t, err)
+		childPid, err := strconv.Atoi(strings.TrimSpace(string(rawPid)))
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			killErr := syscall.Kill(childPid, 0)
+			return killErr != nil
+		}, 2*time.Second, 10*time.Millisecond)
+	})
 }
 
 func TestRestart(t *testing.T) {

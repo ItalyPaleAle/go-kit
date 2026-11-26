@@ -93,13 +93,19 @@ func (p *Processor[K, T]) Dequeue(key K) error {
 
 	// We need to check if this is the next item in the queue, as that requires stopping the processor
 	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	// Re-check under the lock
+	if p.stopped.Load() {
+		return ErrProcessorStopped
+	}
+
 	peek, ok := p.queue.Peek()
 	p.queue.Remove(key)
 	if ok && peek.Key() == key {
 		// If the item was the first one in the queue, restart the processor
 		p.process(true)
 	}
-	p.lock.Unlock()
 
 	return nil
 }
@@ -114,15 +120,15 @@ func (p *Processor[K, T]) Count() int {
 // Close stops the processor.
 // This method blocks until the processor loop returns.
 func (p *Processor[K, T]) Close() error {
-	defer p.wg.Wait()
-	if p.stopped.CompareAndSwap(false, true) {
-		// Send a signal to stop
+	p.lock.Lock()
+	if !p.stopped.Load() {
+		// Transition to stopped under the lock so Enqueue and Dequeue cannot start a new loop or race on wg
+		p.stopped.Store(true)
 		close(p.stopCh)
-		// Blocks until processor loop ends
-		p.processorRunningCh <- struct{}{}
-		return nil
 	}
+	p.lock.Unlock()
 
+	p.wg.Wait()
 	return nil
 }
 

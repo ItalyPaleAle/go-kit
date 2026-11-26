@@ -70,11 +70,12 @@ func TestIsPrivateIP(t *testing.T) {
 		{"benchmarking 198.18.0.0", "198.18.0.0", true},
 		{"benchmarking 198.19.255.255", "198.19.255.255", true},
 
-		// --- CGNAT (allow-listed for Tailscale-like overlays) ---
-		{"CGNAT low 100.64.0.0", "100.64.0.0", false},
-		{"CGNAT typical Tailscale 100.64.1.5", "100.64.1.5", false},
-		{"CGNAT mid 100.100.100.100", "100.100.100.100", false},
-		{"CGNAT high 100.127.255.255", "100.127.255.255", false},
+		// --- CGNAT / shared address space (RFC 6598): blocked by default ---
+		{"CGNAT low 100.64.0.0", "100.64.0.0", true},
+		{"CGNAT typical Tailscale 100.64.1.5", "100.64.1.5", true},
+		{"CGNAT mid 100.100.100.100", "100.100.100.100", true},
+		{"Alibaba Cloud IMDS 100.100.100.200", "100.100.100.200", true},
+		{"CGNAT high 100.127.255.255", "100.127.255.255", true},
 		{"public just below CGNAT", "100.63.255.255", false},
 		{"public just above CGNAT", "100.128.0.0", false},
 
@@ -83,7 +84,7 @@ func TestIsPrivateIP(t *testing.T) {
 		{"v4-mapped private 10.0.0.1", "::ffff:10.0.0.1", true},
 		{"v4-mapped loopback 127.0.0.1", "::ffff:127.0.0.1", true},
 		{"v4-mapped metadata 169.254.169.254", "::ffff:169.254.169.254", true},
-		{"v4-mapped CGNAT 100.64.0.1", "::ffff:100.64.0.1", false},
+		{"v4-mapped CGNAT 100.64.0.1", "::ffff:100.64.0.1", true},
 
 		// --- IPv6 loopback / unspecified ---
 		{"IPv6 unspecified", "::", true},
@@ -94,36 +95,48 @@ func TestIsPrivateIP(t *testing.T) {
 		{"IPv6 link-local typical", "fe80::1", true},
 		{"IPv6 link-local high", "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true},
 
-		// --- IPv6 ULA (fc00::/7) ---
+		// --- IPv6 ULA (fc00::/7), including Tailscale ULA ---
 		{"IPv6 ULA fc00::1", "fc00::1", true},
 		{"IPv6 ULA fd00::1", "fd00::1", true},
 		{"IPv6 ULA fdff high", "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true},
-
-		// --- IPv6 Tailscale subset (carved out of fc00::/7) ---
-		{"Tailscale ULA low", "fd7a:115c:a1e0::", false},
-		{"Tailscale ULA mid", "fd7a:115c:a1e0:ab12::1", false},
-		{"Tailscale ULA high", "fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff", false},
-		{"Tailscale-adjacent still blocked (below)", "fd7a:115c:a1df:ffff::1", true},
-		{"Tailscale-adjacent still blocked (above)", "fd7a:115c:a1e1::1", true},
+		{"Tailscale ULA low", "fd7a:115c:a1e0::", true},
+		{"Tailscale ULA mid", "fd7a:115c:a1e0:ab12::1", true},
+		{"Tailscale ULA high", "fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff", true},
+		{"Tailscale-adjacent blocked (below)", "fd7a:115c:a1df:ffff::1", true},
+		{"Tailscale-adjacent blocked (above)", "fd7a:115c:a1e1::1", true},
 
 		// --- IPv6 multicast ---
 		{"IPv6 multicast all-nodes", "ff02::1", true},
 		{"IPv6 multicast low", "ff00::", true},
 		{"IPv6 multicast high", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true},
 
-		// --- IPv6 documentation ---
+		// --- IPv6 documentation and special-purpose non-routable blocks ---
 		{"IPv6 documentation low", "2001:db8::", true},
 		{"IPv6 documentation typical", "2001:db8::1", true},
 		{"IPv6 documentation high", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", true},
+		{"IPv6 RFC 9637 documentation", "3fff::1", true},
+		{"IPv6 local-use NAT64 RFC 8215", "64:ff9b:1::808:808", true},
+		{"IPv6 discard-only RFC 6666", "100::1", true},
+		{"IPv6 Teredo 2001::/32", "2001::1", true},
+		{"IPv6 benchmarking 2001:2::/48", "2001:2::1", true},
+		{"IPv6 ORCHID 2001:10::/28", "2001:10::1", true},
+		{"IPv6 SRv6 SIDs 5f00::/16", "5f00::1", true},
 
 		// --- Public IPv6 addresses: must NOT be blocked ---
 		{"public IPv6 Cloudflare", "2606:4700:4700::1111", false},
 		{"public IPv6 Google", "2001:4860:4860::8888", false},
+		{"public IPv6 just above 2001::/23", "2001:200::1", false},
 		{"public IPv6 just above documentation", "2001:db9::1", false},
+		{"public IPv6 just above 3fff::/20", "4000::1", false},
 		{"public IPv6 just below fc00", "fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false},
 		{"public IPv6 just above fe80 range", "fec0::1", false},
 
 		// --- IPv4-embedding IPv6 forms must follow the embedded v4 classification (SSRF hardening) ---
+		// SIIT IPv4-translated ::ffff:0:0/96
+		{"SIIT metadata 169.254.169.254", "::ffff:0:169.254.169.254", true},
+		{"SIIT loopback 127.0.0.1", "::ffff:0:127.0.0.1", true},
+		{"SIIT private 10.0.0.1", "::ffff:0:10.0.0.1", true},
+		{"SIIT public 8.8.8.8 stays routable", "::ffff:0:8.8.8.8", false},
 		// NAT64 well-known prefix 64:ff9b::/96
 		{"NAT64 metadata 169.254.169.254", "64:ff9b::a9fe:a9fe", true},
 		{"NAT64 loopback 127.0.0.1", "64:ff9b::7f00:1", true},
@@ -152,17 +165,22 @@ func TestIsPrivateIP(t *testing.T) {
 	}
 }
 
-// The allow-list for CGNAT and Tailscale must take precedence over the private block-list
-// Without the allow-list, fd7a:115c:a1e0::/48 would match fc00::/7 and be blocked
-func TestIsPrivateIP_AllowListOverridesBlockList(t *testing.T) {
+func TestIsTailscaleIP(t *testing.T) {
 	cases := []struct {
 		name string
 		ip   string
+		want bool
 	}{
-		{"CGNAT base", "100.64.0.0"},
-		{"CGNAT broadcast", "100.127.255.255"},
-		{"Tailscale base", "fd7a:115c:a1e0::"},
-		{"Tailscale mid", "fd7a:115c:a1e0:1234:5678:90ab:cdef:0123"},
+		{"CGNAT base", "100.64.0.0", true},
+		{"CGNAT typical Tailscale", "100.64.1.5", true},
+		{"CGNAT broadcast", "100.127.255.255", true},
+		{"v4-mapped Tailscale", "::ffff:100.64.0.1", true},
+		{"Tailscale ULA base", "fd7a:115c:a1e0::", true},
+		{"Tailscale ULA mid", "fd7a:115c:a1e0:1234:5678:90ab:cdef:0123", true},
+		{"RFC1918 private", "10.0.0.1", false},
+		{"Other IPv6 ULA", "fd00::1", false},
+		{"Public IPv4", "8.8.8.8", false},
+		{"NAT64 wrapping CGNAT is not native Tailscale", "64:ff9b::6440:1", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -170,11 +188,14 @@ func TestIsPrivateIP_AllowListOverridesBlockList(t *testing.T) {
 			if ip == nil {
 				t.Fatalf("test setup error: ParseIP(%q) returned nil", tc.ip)
 			}
-			got := IsPrivateIP(ip)
-			if got {
-				t.Errorf("IsPrivateIP(%s) = true, want false (allow-list should override block-list)", tc.ip)
+			got := IsTailscaleIP(ip)
+			if got != tc.want {
+				t.Errorf("IsTailscaleIP(%s) = %v, want %v", tc.ip, got, tc.want)
 			}
 		})
+	}
+	if IsTailscaleIP(nil) {
+		t.Error("IsTailscaleIP(nil) = true, want false")
 	}
 }
 

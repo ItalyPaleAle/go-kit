@@ -21,6 +21,9 @@ import (
 // They never leave the process, so they only need to outlive a single request
 const inProcessPresignTTL = 30 * time.Second
 
+// Maximum lifetime AWS SigV4 allows for a presigned S3 URL (7 days)
+const maxS3PresignTTL = 7 * 24 * time.Hour
+
 type s3Config struct {
 	Bucket    string
 	Region    string
@@ -120,7 +123,12 @@ func (s *S3Backend) Description() string {
 
 // Put uploads an object with a single PUT request
 func (s *S3Backend) Put(ctx context.Context, key string, body io.Reader, maxSize int64, contentType string) (PutResult, error) {
-	err := ValidateKey(key)
+	err := ctx.Err()
+	if err != nil {
+		return PutResult{}, fmt.Errorf("failed to put the S3 object '%s': %w", key, err)
+	}
+
+	err = ValidateKey(key)
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -279,10 +287,20 @@ func (s *S3Backend) SupportsDirectUpload() bool {
 }
 
 // CreateDirectUpload returns a presigned PUT scoped to one exact object key
-func (s *S3Backend) CreateDirectUpload(_ context.Context, key string, _ int64, contentType string, expiresIn time.Duration) (DirectUpload, error) {
+// Note that S3 presigned PUT URLs cannot enforce an upper maxSize range server-side
+func (s *S3Backend) CreateDirectUpload(_ context.Context, key string, maxSize int64, contentType string, expiresIn time.Duration) (DirectUpload, error) {
 	err := ValidateKey(key)
 	if err != nil {
 		return DirectUpload{}, err
+	}
+	if maxSize <= 0 {
+		return DirectUpload{}, errors.New("the maximum upload size must be greater than zero")
+	}
+	if expiresIn < time.Second || expiresIn > maxS3PresignTTL {
+		return DirectUpload{}, fmt.Errorf("the direct upload expiration must be between 1s and %s", maxS3PresignTTL)
+	}
+	if strings.ContainsAny(contentType, "\r\n") {
+		return DirectUpload{}, errors.New("the content type must not contain CR or LF characters")
 	}
 
 	endpoint, err := s.presignedURL(http.MethodPut, key, contentType, expiresIn)
@@ -290,11 +308,16 @@ func (s *S3Backend) CreateDirectUpload(_ context.Context, key string, _ int64, c
 		return DirectUpload{}, err
 	}
 
+	var headers map[string]string
+	if contentType != "" {
+		headers = map[string]string{"Content-Type": contentType}
+	}
+
 	return DirectUpload{
 		Key:     key,
 		URL:     endpoint,
 		Method:  http.MethodPut,
-		Headers: map[string]string{"Content-Type": contentType},
+		Headers: headers,
 	}, nil
 }
 
@@ -331,11 +354,24 @@ func (s *S3Backend) publicObjectURL(key string) (string, error) {
 // Sign one request by moving the SigV4 authentication into the query string, which keeps every request to a plain HTTP call
 // The same signature is what a client uses for a direct upload, which is why the lifetime is a parameter rather than a constant
 func (s *S3Backend) presignedURL(method string, key string, contentType string, expiresIn time.Duration) (string, error) {
+	if strings.ContainsAny(contentType, "\r\n") {
+		return "", errors.New("the content type must not contain CR or LF characters")
+	}
+	if expiresIn < time.Second || expiresIn > maxS3PresignTTL {
+		return "", fmt.Errorf("the presigned URL expiration must be between 1s and %s", maxS3PresignTTL)
+	}
+
 	now := time.Now().UTC()
 	endpoint, err := s.objectURL(key)
 	if err != nil {
 		return "", err
 	}
+
+	canonicalURI := s3URIEscape(endpoint.Path, false)
+	if canonicalURI == "" {
+		canonicalURI = "/"
+	}
+	endpoint.RawPath = canonicalURI
 
 	credentialDate := now.Format("20060102")
 	credentialScope := credentialDate + "/" + s.cfg.Region + "/s3/aws4_request"
@@ -355,12 +391,12 @@ func (s *S3Backend) presignedURL(method string, key string, contentType string, 
 	if s.cfg.Session != "" {
 		query.Set("X-Amz-Security-Token", s.cfg.Session)
 	}
-	endpoint.RawQuery = query.Encode()
+	encodedQuery := canonicalQuery(query)
 
 	canonicalRequest := strings.Join([]string{
 		method,
-		endpoint.EscapedPath(),
-		canonicalQuery(endpoint.Query()),
+		canonicalURI,
+		encodedQuery,
 		canonicalHeaders(signedHeaders, endpoint.Host, contentType),
 		strings.Join(signedHeaders, ";"),
 		"UNSIGNED-PAYLOAD",
@@ -375,9 +411,8 @@ func (s *S3Backend) presignedURL(method string, key string, contentType string, 
 
 	signature := hex.EncodeToString(hmacBytes(s.signingKey(credentialDate), []byte(stringToSign)))
 
-	query = endpoint.Query()
 	query.Set("X-Amz-Signature", signature)
-	endpoint.RawQuery = query.Encode()
+	endpoint.RawQuery = canonicalQuery(query)
 
 	return endpoint.String(), nil
 }
@@ -392,7 +427,8 @@ func (s *S3Backend) objectURL(key string) (*url.URL, error) {
 			return nil, fmt.Errorf("failed to parse the S3 endpoint: %w", err)
 		}
 
-		endpoint.Path = path.Join(endpoint.Path, s.cfg.Bucket, key)
+		basePath := strings.TrimRight(endpoint.Path, "/")
+		endpoint.Path = basePath + "/" + s.cfg.Bucket + "/" + strings.TrimLeft(key, "/")
 		return endpoint, nil
 	}
 
@@ -416,7 +452,7 @@ func canonicalHeaders(signedHeaders []string, host string, contentType string) s
 		switch header {
 		case "content-type":
 			b.WriteString("content-type:")
-			b.WriteString(strings.TrimSpace(contentType))
+			b.WriteString(strings.Join(strings.Fields(strings.TrimSpace(contentType)), " "))
 			b.WriteByte('\n')
 		case "host":
 			b.WriteString("host:")
@@ -430,13 +466,36 @@ func canonicalHeaders(signedHeaders []string, host string, contentType string) s
 func canonicalQuery(values url.Values) string {
 	parts := make([]string, 0, len(values))
 	for key, vals := range values {
-		sort.Strings(vals)
+		encodedKey := s3URIEscape(key, true)
+		if len(vals) == 0 {
+			parts = append(parts, encodedKey+"=")
+			continue
+		}
 		for _, value := range vals {
-			parts = append(parts, url.QueryEscape(key)+"="+url.QueryEscape(value))
+			parts = append(parts, encodedKey+"="+s3URIEscape(value, true))
 		}
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "&")
+}
+
+// s3URIEscape applies AWS SigV4 byte-level URI encoding rules
+// Spaces are encoded as %20, tilde (~) is left unescaped, and slashes are preserved when encodeSlash is false
+func s3URIEscape(value string, encodeSlash bool) string {
+	var out strings.Builder
+	out.Grow(len(value))
+	for i := range len(value) {
+		b := value[i]
+		switch {
+		case (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '-' || b == '.' || b == '_' || b == '~':
+			out.WriteByte(b)
+		case b == '/' && !encodeSlash:
+			out.WriteByte(b)
+		default:
+			fmt.Fprintf(&out, "%%%02X", b)
+		}
+	}
+	return out.String()
 }
 
 func regionFromS3Host(host string) string {

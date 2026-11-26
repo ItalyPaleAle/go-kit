@@ -211,7 +211,12 @@ func (v *VercelBlobBackend) Description() string {
 
 // Put uploads an object through the Blob control-plane API
 func (v *VercelBlobBackend) Put(ctx context.Context, key string, body io.Reader, maxSize int64, contentType string) (PutResult, error) {
-	err := ValidateKey(key)
+	err := ctx.Err()
+	if err != nil {
+		return PutResult{}, fmt.Errorf("failed to put the Vercel Blob object '%s': %w", key, err)
+	}
+
+	err = ValidateKey(key)
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -428,6 +433,15 @@ func (v *VercelBlobBackend) CreateDirectUpload(_ context.Context, key string, ma
 	if err != nil {
 		return DirectUpload{}, err
 	}
+	if maxSize <= 0 {
+		return DirectUpload{}, errors.New("the maximum upload size must be greater than zero")
+	}
+	if expiresIn < time.Second {
+		return DirectUpload{}, errors.New("the direct upload expiration must be at least one second")
+	}
+	if strings.ContainsAny(contentType, "\r\n") {
+		return DirectUpload{}, errors.New("the content type must not contain CR or LF characters")
+	}
 
 	pathname := prefixedKey(v.prefix, key)
 	token, err := v.clientUploadToken(pathname, contentType, maxSize, expiresIn)
@@ -444,18 +458,22 @@ func (v *VercelBlobBackend) CreateDirectUpload(_ context.Context, key string, ma
 	query.Set("pathname", pathname)
 	endpoint.RawQuery = query.Encode()
 
+	headers := map[string]string{
+		"Authorization":        "Bearer " + token,
+		"X-API-Version":        vercelBlobAPIVersion,
+		"X-Vercel-Blob-Access": v.access,
+		"X-Add-Random-Suffix":  "0",
+		"X-Allow-Overwrite":    "1",
+	}
+	if contentType != "" {
+		headers["X-Content-Type"] = contentType
+	}
+
 	return DirectUpload{
-		Key:    key,
-		URL:    endpoint.String(),
-		Method: http.MethodPut,
-		Headers: map[string]string{
-			"Authorization":        "Bearer " + token,
-			"X-API-Version":        vercelBlobAPIVersion,
-			"X-Vercel-Blob-Access": v.access,
-			"X-Content-Type":       contentType,
-			"X-Add-Random-Suffix":  "0",
-			"X-Allow-Overwrite":    "1",
-		},
+		Key:     key,
+		URL:     endpoint.String(),
+		Method:  http.MethodPut,
+		Headers: headers,
 	}, nil
 }
 
@@ -486,9 +504,14 @@ func (v *VercelBlobBackend) clientUploadToken(pathname string, contentType strin
 		return "", errors.New("the Vercel Blob token does not contain a store ID")
 	}
 
+	var allowedContentTypes []string
+	if contentType != "" {
+		allowedContentTypes = []string{contentType}
+	}
+
 	payload := vercelClientTokenPayload{
 		Pathname:            pathname,
-		AllowedContentTypes: []string{contentType},
+		AllowedContentTypes: allowedContentTypes,
 		MaximumSizeInBytes:  maxSize,
 		ValidUntil:          time.Now().Add(expiresIn).UnixMilli(),
 		AllowOverwrite:      true,
@@ -642,7 +665,7 @@ type vercelBlob struct {
 type vercelClientTokenPayload struct {
 	Pathname            string   `json:"pathname"`
 	AllowedContentTypes []string `json:"allowedContentTypes,omitempty"`
-	MaximumSizeInBytes  int64    `json:"maximumSizeInBytes,omitempty"`
+	MaximumSizeInBytes  int64    `json:"maximumSizeInBytes"`
 	ValidUntil          int64    `json:"validUntil"`
 	AllowOverwrite      bool     `json:"allowOverwrite"`
 	AddRandomSuffix     bool     `json:"addRandomSuffix"`

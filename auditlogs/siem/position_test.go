@@ -104,6 +104,11 @@ func TestParsePositionRejectsMalformedInput(t *testing.T) {
 		{name: "truncated escape", input: `v=1;seq=1;xactId=a%2;eventId=;eventCreatedAt=0`},
 		{name: "invalid escape", input: `v=1;seq=1;xactId=a%zz;eventId=;eventCreatedAt=0`},
 		{name: "invalid escape in eventId", input: `v=1;seq=1;xactId=;eventId=%GG;eventCreatedAt=0`},
+		{name: "non-canonical version leading zero", input: `v=01;seq=1;xactId=;eventId=;eventCreatedAt=0`},
+		{name: "non-canonical seq plus sign", input: `v=1;seq=+1;xactId=;eventId=;eventCreatedAt=0`},
+		{name: "non-canonical lowercase hex", input: `v=1;seq=1;xactId=a%3ab;eventId=;eventCreatedAt=0`},
+		{name: "non-canonical unescaped colon", input: `v=1;seq=1;xactId=a:b;eventId=;eventCreatedAt=0`},
+		{name: "non-canonical escaped unreserved byte", input: `v=1;seq=1;xactId=%41;eventId=;eventCreatedAt=0`},
 		{name: "json from an older build", input: `{"v":1,"seq":12345}`},
 	}
 

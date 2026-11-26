@@ -965,3 +965,35 @@ func TestShipperNudgeWindowNeverExceedsTheFlushInterval(t *testing.T) {
 		assert.Equal(t, time.Second, s.nudgeWindow())
 	})
 }
+
+func TestShipperDoesNotShrinkBatchSizeForSingleOversizedEvent(t *testing.T) {
+	collector := newTestCollector(t, http.StatusRequestEntityTooLarge, http.StatusOK)
+	store := newFakeStore(seqEvent(1, "order.create"))
+
+	s, clock := newTestShipper(t, store, collector.URL, func(o *ShipperOptions) {
+		o.BatchSize = 100
+	})
+	autoAdvance(t, clock)
+
+	err := s.drain(t.Context())
+	require.NoError(t, err)
+
+	// A single oversized event cannot be split further, so batchSize stays at 100 and only one retry occurs after backoff
+	assert.Equal(t, 100, s.batchSize)
+	assert.Equal(t, 2, collector.count())
+	assert.Equal(t, int64(1), store.position().Seq)
+}
+
+func TestShipperAbortsFlushOnPersistentCASLosses(t *testing.T) {
+	collector := newTestCollector(t)
+	store := newFakeStore(seqEvent(1, "order.create"))
+	store.loseCAS = 100
+
+	s, _ := newTestShipper(t, store, collector.URL, nil)
+
+	err := s.drain(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, maxSameCursorCASLosses, collector.count())
+	assert.Equal(t, maxSameCursorCASLosses, store.setCalls)
+}

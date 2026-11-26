@@ -432,3 +432,35 @@ func TestProcessorEmptyToActiveTransition(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessorCloseRacesWithEnqueueAndDequeue(t *testing.T) {
+	for range 200 {
+		clock := clocktesting.NewFakeClock(time.Now())
+		processor := NewProcessor(Options[string, *queueableItem]{
+			ExecuteFn: func(_ *queueableItem) {},
+			Clock:     clock,
+		})
+
+		var wg sync.WaitGroup
+		for g := range 4 {
+			wg.Go(func() {
+				for j := range 20 {
+					_ = processor.Enqueue(newTestItem(g*100+j, clock.Now().Add(time.Minute)))
+					_ = processor.Dequeue(strconv.Itoa(g*100 + j))
+				}
+			})
+		}
+		for range 3 {
+			wg.Go(func() {
+				err := processor.Close()
+				assert.NoError(t, err)
+			})
+		}
+		wg.Wait()
+
+		err := processor.Enqueue(newTestItem(999, clock.Now()))
+		require.ErrorIs(t, err, ErrProcessorStopped)
+		err = processor.Dequeue("999")
+		require.ErrorIs(t, err, ErrProcessorStopped)
+	}
+}

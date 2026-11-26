@@ -105,6 +105,8 @@ func TestNewWebhookTelegramURL(t *testing.T) {
 			{name: "disallowed scheme", url: "ftp://api.telegram.org/bot123:ABC?chat_id=42", expectErr: "only http and https are permitted"},
 			{name: "without host", url: "https:///bot123:ABC?chat_id=42", expectErr: "must include a host"},
 			{name: "without path", url: "https://api.telegram.org?chat_id=42", expectErr: "must have a path like /bot<token>/sendMessage"},
+			{name: "schemeless sendMessage", url: "sendMessage", expectErr: "must have a path like /bot<token>/sendMessage"},
+			{name: "schemeless bot token without slash", url: "bot123:ABC?chat_id=42", expectErr: "must have a path like /bot<token>/sendMessage"},
 			{name: "token without the bot prefix", url: "https://api.telegram.org/123:ABC/sendMessage?chat_id=42", expectErr: "must have a path like /bot<token>/sendMessage"},
 			{name: "empty token", url: "https://api.telegram.org/bot/sendMessage?chat_id=42", expectErr: "must have a path like /bot<token>/sendMessage"},
 			{name: "another method", url: "https://api.telegram.org/bot123:ABC/sendPhoto?chat_id=42", expectErr: "must have a path like /bot<token>/sendMessage"},

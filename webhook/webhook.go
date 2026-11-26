@@ -98,6 +98,8 @@ type NewWebhookOpts struct {
 	// Enable it only when the endpoint is expected to be on an internal network
 	// Note: When a proxy is configured in the environment, the block applies to the proxy's address rather than the destination
 	AllowPrivateIPs bool
+	// AllowTailscaleIPs allows sending the webhook to Tailscale's CGNAT (100.64.0.0/10) and ULA (fd7a:115c:a1e0::/48) ranges while keeping all other private and non-routable ranges blocked
+	AllowTailscaleIPs bool
 
 	clock kclock.Clock
 }
@@ -181,8 +183,9 @@ func newWebhookInternal(opts NewWebhookOpts) (Webhook, error) {
 			return http.ErrUseLastResponse
 		},
 		Transport: otelhttp.NewTransport(webhooktransport.New(webhooktransport.Options{
-			AllowPrivateIPs: opts.AllowPrivateIPs,
-			Logger:          opts.Logger,
+			AllowPrivateIPs:   opts.AllowPrivateIPs,
+			AllowTailscaleIPs: opts.AllowTailscaleIPs,
+			Logger:            opts.Logger,
 		})),
 	}
 

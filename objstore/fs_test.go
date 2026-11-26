@@ -152,16 +152,92 @@ func TestFSBackend(t *testing.T) {
 	})
 
 	t.Run("rejects a key that escapes the root folder", func(t *testing.T) {
-		backend, _ := newBackend(t)
+		backend, root := newBackend(t)
 
-		_, err := backend.Put(t.Context(), "../escape.jpg", strings.NewReader("image"), 1024, "image/jpeg")
+		invalidKeys := []string{
+			"",
+			".",
+			"..",
+			"../escape.jpg",
+			"a/.",
+			"./a",
+			"a/",
+			"a//b",
+			"/absolute.jpg",
+			`a\b.jpg`,
+			"C:drive.jpg",
+			"bad\x00key.jpg",
+			"bad\nkey.jpg",
+		}
+		for _, key := range invalidKeys {
+			_, err := backend.Put(t.Context(), key, strings.NewReader("image"), 1024, "image/jpeg")
+			require.Error(t, err, "Put(%q)", key)
+
+			_, _, err = backend.Get(t.Context(), key)
+			require.Error(t, err, "Get(%q)", key)
+
+			_, err = backend.Exists(t.Context(), key)
+			require.Error(t, err, "Exists(%q)", key)
+
+			err = backend.Delete(t.Context(), key)
+			require.Error(t, err, "Delete(%q)", key)
+		}
+
+		// The root folder remains intact after rejected Delete(".") and Put(".") calls
+		assert.DirExists(t, root)
+
+		// Double dots inside a filename segment remain valid
+		_, err := backend.Put(t.Context(), "releases/v1..v2.diff", strings.NewReader("diff"), 1024, "text/plain")
+		require.NoError(t, err)
+	})
+
+	t.Run("ignores folders when looking up, reading, or deleting keys", func(t *testing.T) {
+		backend, root := newBackend(t)
+
+		_, err := backend.Put(t.Context(), "nested/photo.jpg", strings.NewReader("image"), 1024, "image/jpeg")
+		require.NoError(t, err)
+
+		exists, err := backend.Exists(t.Context(), "nested")
+		require.NoError(t, err)
+		assert.False(t, exists)
+
+		_, _, err = backend.Get(t.Context(), "nested")
+		require.ErrorIs(t, err, ErrNotFound)
+
+		err = backend.Delete(t.Context(), "nested")
+		require.NoError(t, err)
+		assert.FileExists(t, filepath.Join(root, "nested", "photo.jpg"))
+	})
+
+	t.Run("refuses symlinks that escape the root folder", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlinks require elevated privileges on Windows")
+		}
+
+		backend, root := newBackend(t)
+		outsideDir := t.TempDir()
+		outsideFile := filepath.Join(outsideDir, "secret.txt")
+		err := os.WriteFile(outsideFile, []byte("secret"), 0o600)
+		require.NoError(t, err)
+
+		err = os.Symlink(outsideFile, filepath.Join(root, "escape-file"))
+		require.NoError(t, err)
+		err = os.Symlink(outsideDir, filepath.Join(root, "escape-dir"))
+		require.NoError(t, err)
+
+		_, _, err = backend.Get(t.Context(), "escape-file")
 		require.Error(t, err)
 
-		_, _, err = backend.Get(t.Context(), "../escape.jpg")
+		_, err = backend.Exists(t.Context(), "escape-file")
 		require.Error(t, err)
 
-		err = backend.Delete(t.Context(), "/absolute.jpg")
+		_, err = backend.Put(t.Context(), "escape-dir/pwned.txt", strings.NewReader("bad"), 1024, "text/plain")
 		require.Error(t, err)
+		assert.NoFileExists(t, filepath.Join(outsideDir, "pwned.txt"))
+
+		err = backend.Delete(t.Context(), "escape-dir/secret.txt")
+		require.Error(t, err)
+		assert.FileExists(t, outsideFile)
 	})
 
 	t.Run("reports a canceled context", func(t *testing.T) {
@@ -320,6 +396,21 @@ func TestSpoolBoundedRejectsOversizeInput(t *testing.T) {
 	file, _, err := spoolBounded(strings.NewReader("12345"), 4)
 	assert.Nil(t, file)
 	require.ErrorIs(t, err, ErrTooLarge)
+
+	file, _, err = spoolBounded(strings.NewReader(""), -1)
+	assert.Nil(t, file)
+	require.ErrorIs(t, err, ErrTooLarge)
+}
+
+func TestSpoolBoundedSupportsMaxInt64(t *testing.T) {
+	file, size, err := spoolBounded(strings.NewReader("hello world"), math.MaxInt64)
+	require.NoError(t, err)
+	defer closeAndRemove(file)
+
+	assert.Equal(t, int64(11), size)
+	data, err := io.ReadAll(file)
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", string(data))
 }
 
 func TestSpoolBoundedRemovesTheFileItCreated(t *testing.T) {

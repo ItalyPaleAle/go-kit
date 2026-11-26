@@ -140,6 +140,11 @@ func ParsePosition(s string) (Position, error) {
 		return Position{}, fmt.Errorf("%w: eventId: %w", ErrPositionInvalid, err)
 	}
 
+	// Reject any non-canonical representation so compare-and-swap on prev.Encode() always matches the stored string
+	if p.Encode() != s {
+		return Position{}, fmt.Errorf("%w: cursor is not in canonical form", ErrPositionInvalid)
+	}
+
 	return p, nil
 }
 

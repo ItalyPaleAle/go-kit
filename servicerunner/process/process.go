@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/italypaleale/go-kit/servicerunner"
@@ -258,10 +259,17 @@ func (p *process) runOnce(ctx context.Context, pump *stdinPump) (runResult, erro
 	log := p.log.With(slog.Int("pid", cmd.Process.Pid))
 	log.InfoContext(ctx, "Process started")
 
-	var waitErr error
+	var (
+		waitErr      error
+		leaderReaped atomic.Bool
+	)
 	exited := make(chan struct{})
 	go func() {
-		waitErr = cmd.Wait()
+		reaped, wErr := waitLeaderExit(cmd)
+		if reaped {
+			waitErr = wErr
+			leaderReaped.Store(true)
+		}
 		close(exited)
 	}()
 
@@ -285,18 +293,24 @@ func (p *process) runOnce(ctx context.Context, pump *stdinPump) (runResult, erro
 	if hookErr != nil {
 		// The service is about to return, so the process must not outlive it
 		res.stopped = true
-		res.killed = p.stop(ctx, cmd.Process, exited, log)
+		res.killed = p.stop(ctx, cmd.Process, &leaderReaped, exited, log)
 	} else {
 		select {
 		case <-exited:
-			// The process exited on its own
+			// The leader exited on its own: clean up any orphaned children left in its process group before reaping it
+			if !leaderReaped.Load() {
+				cleanupProcessGroup(cmd.Process)
+			}
 		case <-ctx.Done():
 			res.stopped = true
-			res.killed = p.stop(ctx, cmd.Process, exited, log)
+			res.killed = p.stop(ctx, cmd.Process, &leaderReaped, exited, log)
 		}
 	}
 
 	<-feedDone
+	if !leaderReaped.Load() {
+		waitErr = cmd.Wait()
+	}
 	res.state = cmd.ProcessState
 	res.waitErr = waitErr
 	return res, hookErr
@@ -323,20 +337,32 @@ func (p *process) notifyStart(ctx context.Context, pid int) (err error) {
 
 // stop sends the shutdown signal to the process and waits for it to exit, killing it if it's still running after the grace timeout
 // It returns true if the process didn't stop gracefully and was killed
-func (p *process) stop(ctx context.Context, proc *os.Process, exited <-chan struct{}, log *slog.Logger) bool {
+func (p *process) stop(ctx context.Context, proc *os.Process, leaderReaped *atomic.Bool, exited <-chan struct{}, log *slog.Logger) bool {
+	// Never signal the process group if a fallback wait path already reaped the leader PID
+	if leaderReaped.Load() {
+		<-exited
+		return false
+	}
+
 	// The context is already canceled, but it still carries values the logger may use
 	ctx = context.WithoutCancel(ctx)
 
 	log.InfoContext(ctx, "Stopping process", slog.String("signal", p.shutdownSignal.String()))
 	err := signalProcess(proc, p.shutdownSignal)
 	switch {
-	case err == nil:
+	case err == nil, isZombieGroupErr(err):
 		timer := time.NewTimer(p.shutdownGraceTimeout)
+		defer timer.Stop()
+
 		select {
 		case <-exited:
-			timer.Stop()
-			log.InfoContext(ctx, "Process stopped")
-			return false
+			if waitForGroupDrain(proc.Pid, timer) {
+				if err == nil {
+					log.InfoContext(ctx, "Process stopped")
+				}
+				return false
+			}
+			log.WarnContext(ctx, "Process group did not exit within the shutdown grace timeout, killing it", slog.Duration("timeout", p.shutdownGraceTimeout))
 		case <-timer.C:
 			log.WarnContext(ctx, "Process did not exit within the shutdown grace timeout, killing it", slog.Duration("timeout", p.shutdownGraceTimeout))
 		}
@@ -355,6 +381,27 @@ func (p *process) stop(ctx context.Context, proc *os.Process, exited <-chan stru
 
 	killAndWait(ctx, proc, exited, log)
 	return true
+}
+
+// waitForGroupDrain waits until no live members remain in pid's process group or timer expires
+func waitForGroupDrain(pid int, timer *time.Timer) bool {
+	if !hasLiveGroupMembers(pid) {
+		return true
+	}
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			return !hasLiveGroupMembers(pid)
+		case <-ticker.C:
+			if !hasLiveGroupMembers(pid) {
+				return true
+			}
+		}
+	}
 }
 
 func killAndWait(ctx context.Context, proc *os.Process, exited <-chan struct{}, log *slog.Logger) {
