@@ -2,8 +2,8 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/otel"
@@ -23,25 +23,34 @@ type InitMetricsOpts struct {
 // InitMetrics initializes the meter provider using OpenTelemetry and sets it as the global one, which instrumentation libraries such as otelhttp use
 // The returned meter can be used to create the application's own metrics
 func InitMetrics(ctx context.Context, opts InitMetricsOpts) (meter api.Meter, shutdownFn func(ctx context.Context) error, err error) {
+	if opts.Config == nil {
+		return nil, nil, errors.New("opts.Config is required")
+	}
+
 	resource, err := opts.Config.GetOtelResource(opts.AppName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get OpenTelemetry resource: %w", err)
 	}
 
-	// Get the metric reader
-	// autoexport defaults to OTLP when OTEL_METRICS_EXPORTER is empty, so set it to "none" to make exporting metrics opt-in
-	if os.Getenv("OTEL_METRICS_EXPORTER") == "" {
-		_ = os.Setenv("OTEL_METRICS_EXPORTER", "none") //nolint:errcheck
-	}
-	mr, err := autoexport.NewMetricReader(ctx)
+	// Default to no-op when OTEL_METRICS_EXPORTER is unset
+	mr, err := autoexport.NewMetricReader(
+		ctx,
+		autoexport.WithFallbackMetricReader(func(context.Context) (metric.Reader, error) {
+			return nil, nil
+		}),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize OpenTelemetry metric reader: %w", err)
 	}
 
-	mp := metric.NewMeterProvider(
+	mpOpts := []metric.Option{
 		metric.WithResource(resource),
-		metric.WithReader(mr),
-	)
+	}
+	if mr != nil && !autoexport.IsNoneMetricReader(mr) {
+		mpOpts = append(mpOpts, metric.WithReader(mr))
+	}
+
+	mp := metric.NewMeterProvider(mpOpts...)
 	otel.SetMeterProvider(mp)
 	meter = mp.Meter(opts.Prefix)
 

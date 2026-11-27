@@ -7,6 +7,10 @@ import (
 )
 
 func RespondWithJSON(w http.ResponseWriter, r *http.Request, data any) {
+	if w.Header().Get(HeaderContentType) == "" {
+		w.Header().Set(HeaderContentType, ContentTypeJson)
+	}
+
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	err := enc.Encode(data)

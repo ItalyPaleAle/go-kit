@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -20,8 +21,10 @@ func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
 		return nil, fmt.Errorf("failed to create watcher: %w", err)
 	}
 
+	cleanFolder := filepath.Clean(folder)
+
 	// Add the folder to the watcher
-	err = watcher.Add(folder)
+	err = watcher.Add(cleanFolder)
 	if err != nil {
 		// Close the watcher on failure so its OS handle is not leaked
 		_ = watcher.Close()
@@ -31,6 +34,33 @@ func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
 	msgChan := make(chan struct{}, 1)
 	batcher := make(chan struct{}, 1)
 	var wg sync.WaitGroup
+
+	scheduleBatch := func() {
+		select {
+		case batcher <- struct{}{}:
+			wg.Go(func() {
+				select {
+				case <-time.After(500 * time.Millisecond):
+					// Continue after delay
+				case <-ctx.Done():
+					// Context canceled during sleep, don't send
+					<-batcher
+					return
+				}
+				<-batcher
+
+				// If the channel is full, do not block
+				select {
+				case msgChan <- struct{}{}:
+					// Nop - signal sent
+				default:
+					// Nop - channel is full
+				}
+			})
+		default:
+			// Nop - there's already a signal batched
+		}
+	}
 
 	// Watch for FS events in background
 	go func() {
@@ -46,39 +76,38 @@ func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
 				// Stop the watcher on context cancellation
 				return
 
-			case event := <-watcher.Events:
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+
+				// Re-establish the watch if the watched folder itself was atomically replaced or removed
+				if (event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename)) && filepath.Clean(event.Name) == cleanFolder {
+					reAddErr := watcher.Add(cleanFolder)
+					if reAddErr != nil {
+						slog.WarnContext(ctx, "Watched folder was removed and could not be re-watched, stopping watcher",
+							slog.Any("error", reAddErr),
+							slog.String("folder", folder),
+						)
+						return
+					}
+					scheduleBatch()
+					continue
+				}
+
 				// Only listen to events where a file is created (included renamed files) or written to
 				if !event.Has(fsnotify.Write) && !event.Has(fsnotify.Create) {
 					continue
 				}
 
 				// Batch changes so we don't send notifications when multiple operations are happening at once
-				select {
-				case batcher <- struct{}{}:
-					wg.Go(func() {
-						select {
-						case <-time.After(500 * time.Millisecond):
-							// Continue after delay
-						case <-ctx.Done():
-							// Context cancelled during sleep, don't send
-							<-batcher
-							return
-						}
-						<-batcher
+				scheduleBatch()
 
-						// If the channel is full, do not block
-						select {
-						case msgChan <- struct{}{}:
-							// Nop - signal sent
-						default:
-							// Nop - channel is full
-						}
-					})
-				default:
-					// Nop - there's already a signal batched
+			case watchErr, ok := <-watcher.Errors:
+				if !ok {
+					return
 				}
 
-			case watchErr := <-watcher.Errors:
 				// Log errors only
 				slog.WarnContext(ctx, "Error while watching for changes to files on disk",
 					slog.Any("error", watchErr),

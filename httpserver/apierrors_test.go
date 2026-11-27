@@ -482,4 +482,21 @@ func TestApiError_JSONSerialization(t *testing.T) {
 		// Empty maps are omitted due to omitempty tag
 		assert.NotContains(t, result, "metadata")
 	})
+
+	t.Run("handles zero httpStatus, nil innerError, and sets Content-Type in RespondWithJSON", func(t *testing.T) {
+		meta := map[string]string{"k": "v1"}
+		zeroErr := (ApiError{Code: "ZERO", Message: "Literal"}).Clone(WithInnerError(nil), WithMetadata(meta))
+		meta["k"] = "mutated"
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		zeroErr.WriteResponse(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), `"k":"v1"`)
+
+		recDirect := httptest.NewRecorder()
+		RespondWithJSON(recDirect, req, map[string]string{"ok": "1"})
+		assert.Equal(t, ContentTypeJson, recDirect.Header().Get(HeaderContentType)) //nolint:testifylint // Header value assertion
+	})
 }

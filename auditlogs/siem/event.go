@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -59,15 +60,28 @@ func (e *Event) stamp(source string, instanceID string) {
 	e.Time = e.Time.UTC()
 
 	// An attribute with no value is the application saying the column was NULL, so drop it rather than emitting an empty string
-	for k, v := range e.Attributes {
+	// Work on a clone
+	hasEmptyAttr := false
+	for _, v := range e.Attributes {
 		if v == "" {
-			delete(e.Attributes, k)
+			hasEmptyAttr = true
+			break
 		}
+	}
+	if hasEmptyAttr {
+		cloned := maps.Clone(e.Attributes)
+		for k, v := range cloned {
+			if v == "" {
+				delete(cloned, k)
+			}
+		}
+		e.Attributes = cloned
 	}
 
 	// Metadata is passed through verbatim as a JSON object
-	// We validate to ensure that it's valid JSON before submitting
-	if len(e.Metadata) == 0 || !json.Valid(e.Metadata) {
+	// Non-object values (such as null, arrays, or scalars) fall back to "{}" so collectors expecting an object do not reject the batch
+	trimmed := bytes.TrimSpace(e.Metadata)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
 		e.Metadata = emptyMetadata
 	}
 }

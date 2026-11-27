@@ -174,6 +174,9 @@ func newVercelBlobBackend(cfg vercelBlobConfig) (*VercelBlobBackend, error) {
 		}
 
 		backend.storeID = normalizeVercelStoreID(storeID)
+		if !isValidVercelStoreID(backend.storeID) {
+			return nil, errors.New("the Vercel Blob store ID contains invalid characters")
+		}
 		backend.tokenFn = func(ctx context.Context) (string, error) {
 			return resolveVercelOIDCToken(ctx, cfg.OIDCTokenEnv)
 		}
@@ -191,6 +194,9 @@ func newVercelBlobBackend(cfg vercelBlobConfig) (*VercelBlobBackend, error) {
 	}
 
 	backend.storeID = vercelStoreIDFromToken(token)
+	if backend.storeID != "" && !isValidVercelStoreID(backend.storeID) {
+		return nil, errors.New("the Vercel Blob token contains an invalid store ID")
+	}
 	backend.readWriteToken = token
 	backend.tokenFn = func(_ context.Context) (string, error) {
 		return token, nil
@@ -236,11 +242,13 @@ func (v *VercelBlobBackend) Put(ctx context.Context, key string, body io.Reader,
 	query.Set("pathname", prefixedKey(v.prefix, key))
 	endpoint.RawQuery = query.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint.String(), file)
+	reqBody, getBody := uploadRequestBody(file, size)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint.String(), reqBody)
 	if err != nil {
 		return PutResult{}, fmt.Errorf("failed to create the Vercel Blob put request: %w", err)
 	}
 	req.ContentLength = size
+	req.GetBody = getBody
 
 	err = v.setCommonHeaders(ctx, req)
 	if err != nil {
@@ -628,6 +636,21 @@ func vercelStoreIDFromToken(token string) string {
 
 func normalizeVercelStoreID(storeID string) string {
 	return strings.TrimPrefix(strings.TrimSpace(storeID), "store_")
+}
+
+func isValidVercelStoreID(storeID string) bool {
+	if storeID == "" {
+		return false
+	}
+
+	for i := range len(storeID) {
+		c := storeID[i]
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !isAlphaNum && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // Build the error for a response Vercel Blob rejected, including the beginning of the body since that's where the reason is

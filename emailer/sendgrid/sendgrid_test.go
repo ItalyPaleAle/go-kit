@@ -198,6 +198,37 @@ func TestSendEmailOmitsHTMLWhenEmpty(t *testing.T) {
 	assert.Equal(t, "text/plain", c0["type"])
 }
 
+func TestSendEmailHTMLOnlyOmitsEmptyPlainText(t *testing.T) {
+	e, rtt := newTestEmailer()
+	reqCh := make(chan *http.Request, 1)
+	resCh := make(chan *http.Response, 1)
+	rtt.SetReqCh(reqCh)
+	rtt.SetResponsesCh(resCh)
+	resCh <- httpResponse(t, http.StatusAccepted, "") //nolint:bodyclose
+
+	err := e.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{HTML: "<p>HTML only</p>"})
+	require.NoError(t, err)
+
+	req := <-reqCh
+	t.Cleanup(func() {
+		_ = req.Body.Close()
+	})
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	err = json.Unmarshal(body, &payload)
+	require.NoError(t, err)
+
+	content, ok := payload["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	c0, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "text/html", c0["type"])
+	assert.Equal(t, "<p>HTML only</p>", c0["value"])
+}
+
 func TestSendEmailReturnsRemoteErrors(t *testing.T) {
 	e, rtt := newTestEmailer()
 	reqCh := make(chan *http.Request, 1)

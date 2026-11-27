@@ -167,6 +167,18 @@ func TestServiceRunner_Run(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, cancelObserved.Load(), "the blocking sibling should observe cancellation even after a clean return")
 	})
+
+	t.Run("propagates internal context.Canceled when runner context is still active", func(t *testing.T) {
+		internalCancelErr := errors.Join(errors.New("upstream failed"), context.Canceled)
+		failingService := func(ctx context.Context) error {
+			return internalCancelErr
+		}
+
+		runner := NewServiceRunner(failingService)
+		err := runner.Run(t.Context())
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+	})
 }
 
 func TestServiceRunner_WaitAll(t *testing.T) {

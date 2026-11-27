@@ -11,7 +11,6 @@ import (
 
 // Queueable is the interface for items that can be added to the queue.
 type Queueable[T comparable] interface {
-	comparable
 	Key() T
 	DueTime() time.Time
 }
@@ -23,6 +22,7 @@ type Queueable[T comparable] interface {
 type queue[K comparable, T Queueable[K]] struct {
 	heap  *queueHeap[K, T]
 	items map[K]*queueItem[K, T]
+	seq   uint64
 }
 
 // newQueue creates a new queue.
@@ -38,26 +38,31 @@ func (p *queue[K, T]) Len() int {
 	return p.heap.Len()
 }
 
-// Insert inserts a new item into the queue.
+// Insert inserts a new item into the queue and returns its sequence number.
 // If replace is true, existing items are replaced
-func (p *queue[K, T]) Insert(r T, replace bool) {
+func (p *queue[K, T]) Insert(r T, replace bool) uint64 {
 	key := r.Key()
 
 	// Check if the item already exists
 	item, ok := p.items[key]
 	if ok {
 		if replace {
+			p.seq++
 			item.value = r
+			item.seq = p.seq
 			heap.Fix(p.heap, item.index)
 		}
-		return
+		return item.seq
 	}
 
+	p.seq++
 	item = &queueItem[K, T]{
 		value: r,
+		seq:   p.seq,
 	}
 	heap.Push(p.heap, item)
 	p.items[key] = item
+	return item.seq
 }
 
 // Pop removes the next item in the queue and returns it.
@@ -89,6 +94,17 @@ func (p *queue[K, T]) Peek() (T, bool) {
 	return (*p.heap)[0].value, true
 }
 
+// PeekSeq returns the next item in the queue and its sequence number, without removing it.
+func (p *queue[K, T]) PeekSeq() (T, uint64, bool) {
+	if p.Len() == 0 {
+		var zero T
+		return zero, 0, false
+	}
+
+	head := (*p.heap)[0]
+	return head.value, head.seq, true
+}
+
 // Remove an item from the queue.
 func (p *queue[K, T]) Remove(key K) {
 	// If the item is not in the queue, this is a nop
@@ -109,12 +125,15 @@ func (p *queue[K, T]) Update(r T) {
 		return
 	}
 
+	p.seq++
 	item.value = r
+	item.seq = p.seq
 	heap.Fix(p.heap, item.index)
 }
 
 type queueItem[K comparable, T Queueable[K]] struct {
 	value T
+	seq   uint64
 
 	// The index of the item in the heap. This is maintained by the heap.Interface methods.
 	index int

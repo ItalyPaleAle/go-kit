@@ -125,14 +125,16 @@ func TestEncodeBatchNeverEmitsTheShippingKey(t *testing.T) {
 }
 
 func TestEncodeBatchNormalizesMetadata(t *testing.T) {
-	t.Run("replaces malformed metadata rather than stalling the feed", func(t *testing.T) {
-		e := testEvent()
-		e.Metadata = json.RawMessage(`{"broken"`)
+	t.Run("replaces malformed or non-object metadata rather than stalling the feed", func(t *testing.T) {
+		for _, raw := range []string{`{"broken"`, `null`, `[1,2]`, `"scalar"`, `42`} {
+			e := testEvent()
+			e.Metadata = json.RawMessage(raw)
 
-		body, _, err := encodeBatch([]Event{e}, FormatNDJSON, "testapp", "inst-1", time.Now())
+			body, _, err := encodeBatch([]Event{e}, FormatNDJSON, "testapp", "inst-1", time.Now())
 
-		require.NoError(t, err)
-		assert.Contains(t, string(body), `"metadata":{}`)
+			require.NoError(t, err)
+			assert.Contains(t, string(body), `"metadata":{}`)
+		}
 	})
 
 	t.Run("passes a metadata object through verbatim", func(t *testing.T) {
@@ -172,13 +174,16 @@ func TestEncodeBatchDoesNotEscapeHTML(t *testing.T) {
 func TestEncodeBatchAttributes(t *testing.T) {
 	t.Run("drops attributes with no value", func(t *testing.T) {
 		// An empty value is the application saying the column was NULL
+		shared := map[string]string{"orderId": "3f7a", "tenantId": ""}
 		e := testEvent()
-		e.Attributes = map[string]string{"orderId": "3f7a", "tenantId": ""}
+		e.Attributes = shared
 
 		body, _, err := encodeBatch([]Event{e}, FormatNDJSON, "testapp", "inst-1", time.Now())
 
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"attributes":{"orderId":"3f7a"}`)
+		// Shared caller maps are not mutated in place
+		assert.Contains(t, shared, "tenantId")
 	})
 
 	t.Run("omits the object when every attribute is empty", func(t *testing.T) {

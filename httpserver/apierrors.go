@@ -30,8 +30,13 @@ func NewApiError(code string, httpStatus int, message string) ApiError {
 // WriteResponse writes the ApiError as a JSON response to the HTTP response writer
 // It sets the Content-Type header to application/json, writes the error's HTTP status code, and serializes the error as JSON in the response body
 func (e ApiError) WriteResponse(w http.ResponseWriter, r *http.Request) {
+	status := e.httpStatus
+	if status < 100 || status > 999 {
+		status = http.StatusInternalServerError
+	}
+
 	w.Header().Set(HeaderContentType, ContentTypeJson)
-	w.WriteHeader(e.httpStatus)
+	w.WriteHeader(status)
 
 	RespondWithJSON(w, r, e)
 }
@@ -60,15 +65,18 @@ func (e ApiError) Clone(with ...func(*ApiError)) ApiError {
 // This is typically used with the Clone method to add an underlying error cause to an API error response
 func WithInnerError(innerError error) func(*ApiError) {
 	return func(e *ApiError) {
-		e.InnerError = innerError.Error()
+		if innerError != nil {
+			e.InnerError = innerError.Error()
+		}
 	}
 }
 
 // WithMetadata returns a function that sets the Metadata field on an ApiError, replacing any existing metadata
 // This is typically used with the Clone method to add additional context or debugging information to an API error response
 func WithMetadata(metadata map[string]string) func(*ApiError) {
+	cloned := maps.Clone(metadata)
 	return func(e *ApiError) {
-		e.Metadata = metadata
+		e.Metadata = maps.Clone(cloned)
 	}
 }
 

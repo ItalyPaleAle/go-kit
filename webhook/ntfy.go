@@ -82,7 +82,7 @@ func (m NtfyMessage) headers() (map[string]string, error) {
 	}
 
 	if m.Click != "" {
-		click, err := ntfyURL(m.Click)
+		click, err := ntfyURL(m.Click, false)
 		if err != nil {
 			return nil, fmt.Errorf("invalid click URL: %w", err)
 		}
@@ -90,7 +90,7 @@ func (m NtfyMessage) headers() (map[string]string, error) {
 	}
 
 	if m.Icon != "" {
-		icon, err := ntfyURL(m.Icon)
+		icon, err := ntfyURL(m.Icon, true)
 		if err != nil {
 			return nil, fmt.Errorf("invalid icon URL: %w", err)
 		}
@@ -120,7 +120,7 @@ func encodeNtfyHeader(val string) string {
 }
 
 // ntfyURL validates a URL for a header and returns it in a form that is ASCII-only
-func ntfyURL(val string) (string, error) {
+func ntfyURL(val string, requireHTTP bool) (string, error) {
 	for _, r := range val {
 		if unicode.IsControl(r) {
 			return "", errors.New("must not contain control characters")
@@ -133,6 +133,18 @@ func ntfyURL(val string) (string, error) {
 	}
 	if parsed.Scheme == "" {
 		return "", errors.New("must include a scheme")
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if requireHTTP {
+		if (scheme != "http" && scheme != "https") || parsed.Hostname() == "" {
+			return "", errors.New("must be an http or https URL with a host")
+		}
+	} else {
+		switch scheme {
+		case "javascript", "data", "vbscript", "file", "blob":
+			return "", fmt.Errorf("disallowed URL scheme %q", parsed.Scheme)
+		}
 	}
 
 	// Percent-encode any non-ASCII byte that url.URL leaves as-is, such as in the query string

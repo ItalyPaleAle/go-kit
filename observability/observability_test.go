@@ -101,4 +101,13 @@ func TestInitLogsShutdown(t *testing.T) {
 
 	err = shutdownFn(t.Context())
 	require.NoError(t, err)
+
+	_, _, err = InitLogs(t.Context(), InitLogsOpts{AppName: "test-app"})
+	require.ErrorContains(t, err, "opts.Config is required")
+
+	_, _, err = InitMetrics(t.Context(), InitMetricsOpts{AppName: "test-app"})
+	require.ErrorContains(t, err, "opts.Config is required")
+
+	_, _, err = InitTraces(t.Context(), InitTracesOpts{AppName: "test-app"})
+	require.ErrorContains(t, err, "opts.Config is required")
 }

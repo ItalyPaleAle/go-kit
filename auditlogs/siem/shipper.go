@@ -200,6 +200,22 @@ func NewShipper(opts ShipperOptions) (*Shipper, error) {
 		opts.HeaderPrefix = DefaultHeaderPrefix
 	}
 
+	if !isValidHTTPHeaderName(opts.AuthorizationHeader) {
+		return nil, errors.New("authorization header name is not valid")
+	}
+	if !isValidHTTPHeaderName(opts.HeaderPrefix) {
+		return nil, errors.New("header prefix is not valid")
+	}
+	if !isValidHTTPHeaderValue(opts.Key) {
+		return nil, errors.New("collector key contains invalid HTTP header characters")
+	}
+	if !isValidHTTPHeaderValue(opts.InstanceID) {
+		return nil, errors.New("instance ID contains invalid HTTP header characters")
+	}
+	if !isValidHTTPHeaderValue(opts.UserAgent) {
+		return nil, errors.New("user agent contains invalid HTTP header characters")
+	}
+
 	client := &http.Client{
 		Timeout: requestTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -247,10 +263,42 @@ func validateURL(raw string) error {
 
 	switch parsed.Scheme {
 	case "http", "https":
-		return nil
+		// OK
 	default:
 		return fmt.Errorf("URL has disallowed scheme %q: only http and https are permitted", parsed.Scheme)
 	}
+
+	if parsed.Hostname() == "" {
+		return errors.New("URL must include a host")
+	}
+
+	return nil
+}
+
+func isValidHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := range len(name) {
+		c := name[i]
+		isToken := (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' ||
+			c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~'
+		if !isToken {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidHTTPHeaderValue(val string) bool {
+	for i := range len(val) {
+		c := val[i]
+		if (c < 0x20 && c != '\t') || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // Nudge wakes the loop early so a freshly written event does not have to wait out the flush interval
@@ -359,7 +407,8 @@ func (s *Shipper) drain(ctx context.Context) error {
 		}
 
 		if len(events) == 0 {
-			s.reportLag(ctx, pos)
+			// When there are no unshipped events past the cursor, the stream is caught up
+			s.recordLag(0)
 			return nil
 		}
 
@@ -732,7 +781,11 @@ func parseRetryAfter(val string) time.Duration {
 		if seconds < 1 {
 			return 0
 		}
-		return min(time.Duration(seconds)*time.Second, backoffCap)
+		maxSeconds := int(backoffCap / time.Second)
+		if seconds >= maxSeconds {
+			return backoffCap
+		}
+		return time.Duration(seconds) * time.Second
 	}
 
 	at, err := http.ParseTime(val)

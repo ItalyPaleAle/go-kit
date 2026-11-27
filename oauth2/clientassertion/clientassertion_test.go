@@ -1,6 +1,7 @@
 package clientassertion
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,11 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func parseTestShortTimeout(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	return context.WithTimeout(t.Context(), 30*time.Millisecond)
 }
 
 // Write a token file and return its path
@@ -98,6 +104,44 @@ func TestTsiamProvider(t *testing.T) {
 		_, err := tsiamProvider("http://[::1", "api://AzureADTokenExchange", http.DefaultClient)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "failed to parse endpoint URL")
+
+		_, err = tsiamProvider("ftp://tsiam.example.com", "api://AzureADTokenExchange", http.DefaultClient)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "only http and https are permitted")
+
+		_, err = tsiamProvider("https:///no-host", "api://AzureADTokenExchange", http.DefaultClient)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "must include a host")
+	})
+
+	t.Run("honors caller context cancellation and rejects empty access_token", func(t *testing.T) {
+		blockClient := &http.Client{
+			Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			}),
+		}
+		fn, err := tsiamProvider("https://tsiam.example.com", "api://AzureADTokenExchange", blockClient)
+		require.NoError(t, err)
+
+		ctx, cancel := parseTestShortTimeout(t)
+		defer cancel()
+		_, err = fn(ctx)
+		require.ErrorIs(t, err, ctx.Err())
+
+		emptyTokenClient := &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"access_token":"  "}`)),
+				}, nil
+			}),
+		}
+		fnEmpty, err := tsiamProvider("https://tsiam.example.com", "api://AzureADTokenExchange", emptyTokenClient)
+		require.NoError(t, err)
+		_, err = fnEmpty(t.Context())
+		require.ErrorContains(t, err, "access_token in response is empty")
 	})
 
 	t.Run("success and caches token", func(t *testing.T) {

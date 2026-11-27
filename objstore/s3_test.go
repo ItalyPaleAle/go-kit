@@ -115,6 +115,22 @@ func TestS3PutStreamsBoundedBodyAndReturnsPublicURL(t *testing.T) {
 	assert.Equal(t, "https://assets.example.test/base/site/image.webp", result.URL)
 	assert.Equal(t, []byte("image"), received)
 	assert.True(t, backend.HasPublicAddressing())
+
+	// Zero-byte uploads must declare Content-Length: 0 rather than chunked encoding
+	var zeroContentLength int64
+	var zeroTransferEncoding []string
+	zeroServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zeroContentLength = r.ContentLength
+		zeroTransferEncoding = r.TransferEncoding
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(zeroServer.Close)
+	zeroBackend := newTestS3Backend(t, zeroServer, s3Config{})
+	zeroRes, err := zeroBackend.Put(t.Context(), "site/empty.txt", strings.NewReader(""), 5, "text/plain")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), zeroRes.Size)
+	assert.Equal(t, int64(0), zeroContentLength)
+	assert.Empty(t, zeroTransferEncoding)
 }
 
 // The prefix is the backend's own concern, so callers pass logical keys and the prefix appears in the request and in the public URL

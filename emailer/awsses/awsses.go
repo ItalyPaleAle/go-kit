@@ -13,6 +13,12 @@ import (
 	"github.com/italypaleale/go-kit/emailer/internal"
 )
 
+var defaultSESHTTPClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // AWSSES is an Emailer that uses AWS SES
 type AWSSES struct {
 	accessKeyID     string
@@ -92,15 +98,24 @@ func (a AWSSES) SendEmail(ctx context.Context, to internal.EmailAddress, subject
 	}
 
 	// Build the smallest SES v2 payload that matches the Emailer interface
+	var bodyParts sendEmailBody
+	if message.Text != "" || message.HTML == "" {
+		bodyParts.Text = &sendEmailContentValue{
+			Charset: "UTF-8",
+			Data:    message.Text,
+		}
+	}
+	if message.HTML != "" {
+		bodyParts.HTML = &sendEmailContentValue{
+			Charset: "UTF-8",
+			Data:    message.HTML,
+		}
+	}
+
 	payloadBody := sendEmailRequest{
 		Content: sendEmailContent{
 			Simple: &sendEmailMessage{
-				Body: sendEmailBody{
-					Text: &sendEmailContentValue{
-						Charset: "UTF-8",
-						Data:    message.Text,
-					},
-				},
+				Body: bodyParts,
 				Subject: sendEmailContentValue{
 					Charset: "UTF-8",
 					Data:    subject,
@@ -111,12 +126,6 @@ func (a AWSSES) SendEmail(ctx context.Context, to internal.EmailAddress, subject
 			ToAddresses: []string{to.Format()},
 		},
 		FromEmailAddress: a.from,
-	}
-	if message.HTML != "" {
-		payloadBody.Content.Simple.Body.HTML = &sendEmailContentValue{
-			Charset: "UTF-8",
-			Data:    message.HTML,
-		}
 	}
 
 	// Encode the request body once so the same bytes can be signed and transmitted
@@ -147,19 +156,19 @@ func (a AWSSES) SendEmail(ctx context.Context, to internal.EmailAddress, subject
 		return fmt.Errorf("failed to sign request: %w", err)
 	}
 
-	// Allow tests to inject a local client while defaulting to the shared HTTP transport in production
+	// Allow tests to inject a local client while defaulting to a redirect-disabled client in production
 	client := a.httpClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultSESHTTPClient
 	}
 
-	// Always drain and close the response body so the connection can be reused by the transport
+	// Always drain a bounded portion and close the response body so the connection can be reused by the transport
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 		_ = resp.Body.Close()
 	}()
 

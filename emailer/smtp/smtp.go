@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	smtpTLSAuto     = "auto"
-	smtpTLSStartTLS = "starttls"
-	smtpTLSImplicit = "implicit"
-	smtpTLSNone     = "none"
+	smtpTLSAuto        = "auto"
+	smtpTLSStartTLS    = "starttls"
+	smtpTLSImplicit    = "implicit"
+	smtpTLSNone        = "none"
+	defaultSMTPTimeout = 20 * time.Second
 )
 
 // SMTPEmailer is an Emailer that uses a traditional SMTP server
@@ -151,6 +152,14 @@ func (s SMTPEmailer) SendEmail(ctx context.Context, to internal.EmailAddress, su
 	payload, err := s.buildMessage(to, subject, message)
 	if err != nil {
 		return fmt.Errorf("failed to build SMTP email: %w", err)
+	}
+
+	// Apply a default timeout when the caller did not set a deadline so unresponsive SMTP servers cannot block indefinitely
+	_, ok := ctx.Deadline()
+	if !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultSMTPTimeout)
+		defer cancel()
 	}
 
 	// Establish the network connection using the requested TLS mode
@@ -314,16 +323,23 @@ func (s SMTPEmailer) buildMessage(to internal.EmailAddress, subject string, mess
 
 // dialSMTP opens the underlying TCP connection and applies implicit TLS when requested
 func (s SMTPEmailer) dialSMTP(ctx context.Context) (net.Conn, error) {
-	// Implicit TLS performs the handshake before the SMTP protocol starts
-	if s.tlsMode == smtpTLSImplicit {
-		tlsDialer := tls.Dialer{
-			NetDialer: &net.Dialer{},
-			Config:    s.tlsConfig,
-		}
-		return tlsDialer.DialContext(ctx, "tcp", s.address)
+	rawConn, err := s.dialContext(ctx, "tcp", s.address)
+	if err != nil {
+		return nil, err
 	}
 
-	return s.dialContext(ctx, "tcp", s.address)
+	// Implicit TLS performs the handshake before the SMTP protocol starts
+	if s.tlsMode == smtpTLSImplicit {
+		tlsConn := tls.Client(rawConn, s.tlsConfig.Clone())
+		err = tlsConn.HandshakeContext(ctx)
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
+	}
+
+	return rawConn, nil
 }
 
 // configureTLS upgrades the SMTP session with STARTTLS when the selected mode requires it

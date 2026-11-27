@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -229,6 +230,13 @@ func (p *process) runOnce(ctx context.Context, pump *stdinPump) (runResult, erro
 	}
 
 	cmd := exec.Command(p.command, p.args...) //nolint:gosec // Running a command chosen by the caller is the purpose of this package
+	if p.workingDirectory != "" && cmd.Err == nil && cmd.Path != "" && !filepath.IsAbs(cmd.Path) {
+		// Pin relative command paths against the parent's working directory before chdir so a writable workingDirectory cannot hijack the executable
+		absPath, err := filepath.Abs(cmd.Path)
+		if err == nil {
+			cmd.Path = absPath
+		}
+	}
 	cmd.Dir = p.workingDirectory
 	cmd.Env = p.environ()
 	cmd.Stdout = p.stdout

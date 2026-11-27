@@ -210,6 +210,9 @@ func TestWebhookNtfy(t *testing.T) {
 			{name: "tag with a comma", msg: NtfyMessage{Message: "x", Tags: []string{"a,b"}}, expect: "must not contain commas"},
 			{name: "click with a line break", msg: NtfyMessage{Message: "x", Click: "https://example.com/\r\nX-Evil: 1"}, expect: "invalid click URL"},
 			{name: "click without a scheme", msg: NtfyMessage{Message: "x", Click: "example.com/page"}, expect: "must include a scheme"},
+			{name: "click with javascript scheme", msg: NtfyMessage{Message: "x", Click: "javascript:alert(1)"}, expect: "disallowed URL scheme"},
+			{name: "click with data scheme", msg: NtfyMessage{Message: "x", Click: "data:text/html,<h1>hi</h1>"}, expect: "disallowed URL scheme"},
+			{name: "icon with non-http scheme", msg: NtfyMessage{Message: "x", Icon: "ftp://example.com/icon.png"}, expect: "must be an http or https URL"},
 			{name: "malformed icon", msg: NtfyMessage{Message: "x", Icon: "://bad"}, expect: "invalid icon URL"},
 		}
 		for _, tc := range tests {

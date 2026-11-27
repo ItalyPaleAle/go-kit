@@ -165,7 +165,11 @@ func (p *tlsCertProvider) Watch(ctx context.Context) error {
 		var reloadErr error
 		for {
 			select {
-			case <-watcher:
+			case _, ok := <-watcher:
+				if !ok {
+					return
+				}
+
 				slog.InfoContext(ctx, "Found changes in folder containing TLS certificates; will reload certificates")
 				reloadErr = p.Reload()
 				if reloadErr != nil {

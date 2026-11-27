@@ -6,6 +6,7 @@
 package eventqueue
 
 import (
+	"math"
 	"math/rand"
 	"runtime"
 	"strconv"
@@ -462,5 +463,47 @@ func TestProcessorCloseRacesWithEnqueueAndDequeue(t *testing.T) {
 		require.ErrorIs(t, err, ErrProcessorStopped)
 		err = processor.Dequeue("999")
 		require.ErrorIs(t, err, ErrProcessorStopped)
+	}
+}
+
+type nonComparableNaNItem struct {
+	key     string
+	dueTime time.Time
+	metric  float64
+	tags    []string
+}
+
+func (i nonComparableNaNItem) Key() string {
+	return i.key
+}
+
+func (i nonComparableNaNItem) DueTime() time.Time {
+	return i.dueTime
+}
+
+func TestProcessorHandlesNaNAndNonComparableItems(t *testing.T) {
+	clock := clocktesting.NewFakeClock(time.Now())
+	doneCh := make(chan string, 1)
+	processor := NewProcessor(Options[string, nonComparableNaNItem]{
+		ExecuteFn: func(item nonComparableNaNItem) {
+			doneCh <- item.key
+		},
+		Clock: clock,
+	})
+	defer processor.Close()
+
+	err := processor.Enqueue(nonComparableNaNItem{
+		key:     "nan-item",
+		dueTime: clock.Now(),
+		metric:  math.NaN(),
+		tags:    []string{"a", "b"},
+	})
+	require.NoError(t, err)
+
+	select {
+	case got := <-doneCh:
+		assert.Equal(t, "nan-item", got)
+	case <-time.After(time.Second):
+		t.Fatal("NaN item did not execute")
 	}
 }

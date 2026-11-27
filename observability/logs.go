@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -54,6 +55,10 @@ type InitLogsOpts struct {
 // InitLogs initializes a new slog logger that also sends logs to OpenTelemetry, if an exporter is configured
 // Records below the configured level are dropped for both destinations
 func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdownFn func(ctx context.Context) error, err error) {
+	if opts.Config == nil {
+		return nil, nil, errors.New("opts.Config is required")
+	}
+
 	level, err := GetLogLevel(opts.Level)
 	if err != nil {
 		return nil, nil, err
@@ -81,42 +86,45 @@ func InitLogs(ctx context.Context, opts InitLogsOpts) (log *slog.Logger, shutdow
 	}
 
 	// Create a handler that sends logs to OTel too
-	// We wrap the handler in a "fanout" handler that sends logs to both
 	resource, err := opts.Config.GetOtelResource(opts.AppName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get OpenTelemetry resource: %w", err)
 	}
 
-	// autoexport defaults to OTLP when OTEL_LOGS_EXPORTER is empty, so set it to "none" to make exporting logs opt-in
-	if os.Getenv("OTEL_LOGS_EXPORTER") == "" {
-		_ = os.Setenv("OTEL_LOGS_EXPORTER", "none") //nolint:errcheck
-	}
-	exp, err := autoexport.NewLogExporter(ctx)
+	// Default to no-op when OTEL_LOGS_EXPORTER is unset so exporting logs stays opt-in
+	exp, err := autoexport.NewLogExporter(
+		ctx,
+		autoexport.WithFallbackLogExporter(func(context.Context) (logSdk.Exporter, error) {
+			return nil, nil
+		}),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize OpenTelemetry log exporter: %w", err)
 	}
 
-	// Create the logger provider
-	provider := logSdk.NewLoggerProvider(
-		logSdk.WithProcessor(
-			logSdk.NewBatchProcessor(exp),
-		),
+	providerOpts := []logSdk.LoggerProviderOption{
 		logSdk.WithResource(resource),
-	)
+	}
 
-	// Set the logger provider globally
+	exportEnabled := (exp != nil && !autoexport.IsNoneLogExporter(exp))
+	if exportEnabled {
+		providerOpts = append(providerOpts, logSdk.WithProcessor(logSdk.NewBatchProcessor(exp)))
+	}
+
+	provider := logSdk.NewLoggerProvider(providerOpts...)
 	otel.SetLoggerProvider(provider)
 
-	// Wrap the handler in a MultiHandler for fanout
-	handler = slog.NewMultiHandler(
-		handler,
-		levelHandler{
-			level:   level,
-			handler: otelslog.NewHandler(opts.AppName, otelslog.WithLoggerProvider(provider)),
-		},
-	)
+	if exportEnabled {
+		// Wrap the handler in a MultiHandler for fanout when an OTel exporter is active
+		handler = slog.NewMultiHandler(
+			handler,
+			levelHandler{
+				level:   level,
+				handler: otelslog.NewHandler(opts.AppName, otelslog.WithLoggerProvider(provider)),
+			},
+		)
+	}
 
-	// Return a function to invoke during shutdown
 	shutdownFn = provider.Shutdown
 
 	log = slog.New(handler).

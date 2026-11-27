@@ -53,8 +53,8 @@ func (r *ServiceRunner) Run(parentCtx context.Context) error {
 			// Run the service
 			rErr := service(ctx)
 
-			// Ignore context canceled errors here as they generally indicate that the service is stopping.
-			if rErr != nil && !errors.Is(rErr, context.Canceled) {
+			// Ignore context canceled errors only when the runner's own context was canceled
+			if rErr != nil && (!errors.Is(rErr, context.Canceled) || ctx.Err() == nil) {
 				errCh <- rErr
 				return
 			}

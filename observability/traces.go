@@ -2,8 +2,8 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/otel"
@@ -22,17 +22,22 @@ type InitTracesOpts struct {
 
 // InitTraces initializes the tracing provider using OpenTelemetry
 func InitTraces(ctx context.Context, opts InitTracesOpts) (traceProvider *sdkTrace.TracerProvider, shutdownFn func(ctx context.Context) error, err error) {
+	if opts.Config == nil {
+		return nil, nil, errors.New("opts.Config is required")
+	}
+
 	resource, err := opts.Config.GetOtelResource(opts.AppName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get OpenTelemetry resource: %w", err)
 	}
 
-	// Get the trace exporter
-	// If the env var OTEL_TRACES_EXPORTER is empty, we set it to "none"
-	if os.Getenv("OTEL_TRACES_EXPORTER") == "" {
-		_ = os.Setenv("OTEL_TRACES_EXPORTER", "none")
-	}
-	exporter, err := autoexport.NewSpanExporter(ctx)
+	// Default to no-op when OTEL_TRACES_EXPORTER is unset
+	exporter, err := autoexport.NewSpanExporter(
+		ctx,
+		autoexport.WithFallbackSpanExporter(func(context.Context) (sdkTrace.SpanExporter, error) {
+			return nil, nil
+		}),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize OpenTelemetry span exporter: %w", err)
 	}
@@ -40,7 +45,9 @@ func InitTraces(ctx context.Context, opts InitTracesOpts) (traceProvider *sdkTra
 	// Init the trace provider
 	tracerOpts := []sdkTrace.TracerProviderOption{
 		sdkTrace.WithResource(resource),
-		sdkTrace.WithBatcher(exporter),
+	}
+	if exporter != nil && !autoexport.IsNoneSpanExporter(exporter) {
+		tracerOpts = append(tracerOpts, sdkTrace.WithBatcher(exporter))
 	}
 	if opts.Sampler != nil {
 		tracerOpts = append(tracerOpts, sdkTrace.WithSampler(opts.Sampler))

@@ -168,3 +168,33 @@ func TestSendEmailReturnsRemoteErrors(t *testing.T) {
 	require.ErrorContains(t, err, "failed to send email (400):")
 	require.ErrorContains(t, err, "MessageRejected")
 }
+
+func TestSendEmailHTMLOnlyOmitsEmptyPlainText(t *testing.T) {
+	var bodyMap map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		_ = json.Unmarshal(raw, &payload)
+		content, _ := payload["Content"].(map[string]any)
+		simple, _ := content["Simple"].(map[string]any)
+		bodyMap, _ = simple["Body"].(map[string]any)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"MessageId":"msg-123"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	emailer := AWSSES{
+		accessKeyID:     "access-key",
+		secretAccessKey: "secret-key",
+		region:          "us-east-1",
+		from:            "sender@example.com",
+		endpoint:        server.URL,
+		httpClient:      server.Client(),
+		now:             time.Now,
+	}
+
+	err := emailer.SendEmail(t.Context(), internal.EmailAddress{Address: "recipient@example.com"}, "Hello", internal.SendEmailMessage{HTML: "<p>HTML only</p>"})
+	require.NoError(t, err)
+	assert.NotContains(t, bodyMap, "Text")
+	assert.Contains(t, bodyMap, "Html")
+}

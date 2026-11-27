@@ -131,7 +131,7 @@ func (r *ResendEmailer) SendEmail(ctx context.Context, to internal.EmailAddress,
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 		_ = resp.Body.Close()
 	}()
 

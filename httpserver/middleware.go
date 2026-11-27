@@ -49,11 +49,41 @@ func MiddlewareHostIDHeader(hostID string) Middleware {
 	}
 }
 
+// commitTrackingResponseWriter records whether response headers or body bytes have already been sent
+type commitTrackingResponseWriter struct {
+	http.ResponseWriter
+
+	committed bool
+}
+
+func (cw *commitTrackingResponseWriter) WriteHeader(statusCode int) {
+	cw.committed = true
+	cw.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (cw *commitTrackingResponseWriter) Write(p []byte) (int, error) {
+	cw.committed = true
+	return cw.ResponseWriter.Write(p)
+}
+
+func (cw *commitTrackingResponseWriter) Flush() {
+	cw.committed = true
+	flusher, ok := cw.ResponseWriter.(http.Flusher)
+	if ok {
+		flusher.Flush()
+	}
+}
+
+func (cw *commitTrackingResponseWriter) Unwrap() http.ResponseWriter {
+	return cw.ResponseWriter
+}
+
 // MiddlewareRecoverPanics is a middleware that recovers from panics in downstream handlers, logs them with a stack trace, and writes errResponse
-// Panics with http.ErrAbortHandler are re-panicked so net/http can handle them
+// Panics with http.ErrAbortHandler, or panics after the response has already been committed, abort the connection via http.ErrAbortHandler
 func MiddlewareRecoverPanics(errResponse ApiError) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cw := &commitTrackingResponseWriter{ResponseWriter: w}
 			defer func() { //nolint:contextcheck // Uses r.Context()
 				p := recover()
 				if p == nil {
@@ -69,10 +99,13 @@ func MiddlewareRecoverPanics(errResponse ApiError) Middleware {
 					slog.Any("panic", p),
 					slog.String("stack", string(debug.Stack())),
 				)
-				errResponse.WriteResponse(w, r)
+				if cw.committed {
+					panic(http.ErrAbortHandler)
+				}
+				errResponse.WriteResponse(cw, r)
 			}()
 
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(cw, r)
 		})
 	}
 }

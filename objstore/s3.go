@@ -77,6 +77,9 @@ func parseS3DSN(dsn string) (s3Config, error) {
 	if bucket == "" {
 		return s3Config{}, errors.New("the S3 storage DSN must include a bucket in its path")
 	}
+	if !isValidS3Identifier(bucket) {
+		return s3Config{}, errors.New("the S3 storage DSN bucket name contains invalid characters")
+	}
 
 	// The region is part of the signature, so it's either explicit or derived from an AWS-style endpoint
 	query := u.Query()
@@ -86,6 +89,9 @@ func parseS3DSN(dsn string) (s3Config, error) {
 	}
 	if region == "" {
 		return s3Config{}, errors.New("the S3 storage DSN must include a region")
+	}
+	if !isValidS3Identifier(region) {
+		return s3Config{}, errors.New("the S3 storage DSN region contains invalid characters")
 	}
 
 	// The public URL is the base objects are served from when the bucket is fronted by a CDN, and it's validated here rather than at the first write
@@ -145,7 +151,8 @@ func (s *S3Backend) Put(ctx context.Context, key string, body io.Reader, maxSize
 		return PutResult{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, file)
+	reqBody, getBody := uploadRequestBody(file, size)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, reqBody)
 	if err != nil {
 		return PutResult{}, fmt.Errorf("failed to create the S3 put request: %w", err)
 	}
@@ -153,6 +160,7 @@ func (s *S3Backend) Put(ctx context.Context, key string, body io.Reader, maxSize
 		req.Header.Set("Content-Type", contentType)
 	}
 	req.ContentLength = size
+	req.GetBody = getBody
 
 	res, err := s.httpClient.Do(req)
 	if err != nil {
@@ -513,6 +521,20 @@ func endpointFromURL(u *url.URL) string {
 	}
 
 	return "https://" + u.Host
+}
+
+func isValidS3Identifier(s string) bool {
+	if s == "" || s[0] == '.' || s[len(s)-1] == '.' || strings.Contains(s, "..") {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		isAlphaNum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !isAlphaNum && c != '-' && c != '.' && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // Build the error for a response S3 rejected, including the beginning of the body since that's where S3 puts the reason

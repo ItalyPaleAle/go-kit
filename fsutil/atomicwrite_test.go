@@ -112,6 +112,11 @@ func TestWriteFile(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), string(filepath.Separator)+".custom-")
 		assert.Empty(t, listDir(t, dir))
+
+		err = WriteFile(path, []byte("x"), 0o600, WithTempPrefix("../escape-"))
+		require.ErrorContains(t, err, "invalid temporary file prefix")
+		err = WriteFile(path, []byte("x"), 0o600, WithTempPrefix("sub/escape-"))
+		require.ErrorContains(t, err, "invalid temporary file prefix")
 	})
 
 	t.Run("Leaves no temp files on failure", func(t *testing.T) {

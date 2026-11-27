@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
@@ -101,6 +102,10 @@ func NewTSNetServer(ctx context.Context, opts NewTSNetServerOpts) (*TSNetServer,
 	if err != nil {
 		return nil, err
 	}
+	if state == nil || state.Self == nil {
+		_ = tsrv.Close()
+		return nil, errors.New("tailscale node status did not report self state")
+	}
 
 	t := &TSNetServer{
 		hostname: strings.TrimSuffix(state.Self.DNSName, "."),
@@ -165,7 +170,10 @@ func (t *TSNetServer) LocalClient() (*local.Client, error) {
 // Listen returns a TLS listener on the tailnet with HTTP/2 and HTTP/1.1 ALPN support
 func (t *TSNetServer) Listen(port int) (net.Listener, error) {
 	// Configure TLS manually because tsnet.Server.ListenTLS does not enable HTTP/2
-	st, err := t.server.Up(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	st, err := t.server.Up(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Tailscale node status: %w", err)
 	}

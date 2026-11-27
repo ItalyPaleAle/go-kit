@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -103,13 +104,23 @@ func CreateFile(path string, data []byte, perm fs.FileMode, opts ...Option) erro
 		case statErr == nil:
 			return fmt.Errorf("file '%s' already exists: %w", path, fs.ErrExist)
 		case errors.Is(statErr, fs.ErrNotExist) && !errors.Is(linkErr, fs.ErrExist):
-			// Fall back to rename when hard links are not supported
+			// Hard links are not supported: atomically claim path with O_EXCL so only one concurrent writer succeeds
+			claimFile, claimErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm) // #nosec G304 -- Caller-supplied target path
+			if errors.Is(claimErr, fs.ErrExist) {
+				return fmt.Errorf("file '%s' already exists: %w", path, fs.ErrExist)
+			} else if claimErr != nil {
+				return fmt.Errorf("failed to claim '%s': %w", path, claimErr)
+			}
+			_ = claimFile.Close()
 		default:
 			return fmt.Errorf("failed to link the temporary file to '%s': %w", path, linkErr)
 		}
 
 		err = os.Rename(tmpPath, path)
 		if err != nil {
+			if !o.replaceEmpty {
+				_ = os.Remove(path)
+			}
 			return fmt.Errorf("failed to rename the temporary file to '%s': %w", path, err)
 		}
 	}
@@ -144,6 +155,10 @@ func SyncDir(dir string) error {
 
 // writeTempFile writes r to a new temporary file in filepath.Dir(path), syncs it, and returns its path and byte count
 func writeTempFile(path string, r io.Reader, perm fs.FileMode, prefix string) (_ string, n int64, err error) {
+	if prefix == "." || prefix == ".." || strings.ContainsRune(prefix, '/') || strings.ContainsRune(prefix, filepath.Separator) {
+		return "", 0, fmt.Errorf("invalid temporary file prefix %q: must not contain path separators or traversal segments", prefix)
+	}
+
 	// Create the temp file in the same directory as path so renaming is atomic
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, prefix+"*")

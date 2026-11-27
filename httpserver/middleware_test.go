@@ -665,4 +665,21 @@ func TestMiddlewareRecoverPanics(t *testing.T) {
 		})
 		assert.Empty(t, logs.String())
 	})
+
+	t.Run("Panics after response commitment abort with http.ErrAbortHandler instead of splicing JSON", func(t *testing.T) {
+		logs := captureLogs(t)
+		handler := MiddlewareRecoverPanics(errInternal)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("partial-stream")) //nolint:errcheck
+			panic("mid-stream failure")
+		}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+		assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
+			handler.ServeHTTP(rec, req)
+		})
+		assert.Equal(t, "partial-stream", rec.Body.String())
+		assert.Contains(t, logs.String(), "mid-stream failure")
+	})
 }

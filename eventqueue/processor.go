@@ -17,6 +17,8 @@ import (
 var ErrProcessorStopped = errors.New("processor is stopped")
 
 type Options[K comparable, T Queueable[K]] struct {
+	// ExecuteFn is invoked sequentially on the processor goroutine when an item becomes due
+	// Because Close waits for any in-flight ExecuteFn call to finish, ExecuteFn must not call Close synchronously
 	ExecuteFn func(r T)
 	Clock     kclock.Clock
 }
@@ -42,8 +44,12 @@ func NewProcessor[K comparable, T Queueable[K]](opts Options[K, T]) *Processor[K
 	if cl == nil {
 		cl = kclock.RealClock{}
 	}
+	execFn := opts.ExecuteFn
+	if execFn == nil {
+		execFn = func(T) {}
+	}
 	return &Processor[K, T]{
-		executeFn:          opts.ExecuteFn,
+		executeFn:          execFn,
 		queue:              newQueue[K, T](),
 		processorRunningCh: make(chan struct{}, 1),
 		stopCh:             make(chan struct{}),
@@ -76,12 +82,12 @@ func (p *Processor[K, T]) Enqueue(rs ...T) error {
 
 func (p *Processor[K, T]) enqueue(r T) {
 	// Insert or replace the item in the queue
-	// If the item added or replaced is the first one in the queue, we need to know that
+	// Track sequence numbers rather than comparing T values directly so NaN fields or non-comparable interface values never spin or panic
 	peek, ok := p.queue.Peek()
-	isFirst := (ok && peek.Key() == r.Key()) // This is going to be true if the item being replaced is the first one in the queue
-	p.queue.Insert(r, true)
-	peek, _ = p.queue.Peek()         // No need to check for "ok" here because we know this will return an item
-	isFirst = isFirst || (peek == r) // This is also going to be true if the item just added landed at the front of the queue
+	isFirst := ok && peek.Key() == r.Key() // This is going to be true if the item being replaced is the first one in the queue
+	insertedSeq := p.queue.Insert(r, true)
+	_, headSeq, _ := p.queue.PeekSeq()          // No need to check for "ok" here because we know this will return an item
+	isFirst = isFirst || headSeq == insertedSeq // This is also going to be true if the item just added landed at the front of the queue
 	p.process(isFirst)
 }
 
@@ -161,6 +167,7 @@ func (p *Processor[K, T]) process(isNext bool) {
 func (p *Processor[K, T]) processLoop() {
 	var (
 		r        T
+		seq      uint64
 		ok       bool
 		t        kclock.Timer
 		dueTime  time.Time
@@ -170,7 +177,7 @@ func (p *Processor[K, T]) processLoop() {
 	for {
 		// Continue processing items until the queue is empty
 		p.lock.Lock()
-		r, ok = p.queue.Peek()
+		r, seq, ok = p.queue.PeekSeq()
 		if !ok {
 			// Release the channel while still holding the lock
 			// This way, a concurrent Enqueue either inserts its item before we peek, or sees that no processor is running and starts a new one
@@ -201,7 +208,7 @@ func (p *Processor[K, T]) processLoop() {
 		// If the deadline is less than 0.5ms away, execute it right away
 		// This is more efficient than creating a timer
 		if deadline < 500*time.Microsecond {
-			p.execute(r)
+			p.execute(seq)
 			continue
 		}
 
@@ -209,7 +216,7 @@ func (p *Processor[K, T]) processLoop() {
 		select {
 		// Wait for when it's time to execute the item
 		case <-t.C():
-			p.execute(r)
+			p.execute(seq)
 
 		// If we get a reset signal, restart the loop
 		case <-p.resetCh:
@@ -232,19 +239,16 @@ func (p *Processor[K, T]) processLoop() {
 	}
 }
 
-// Executes a item when it's time.
-func (p *Processor[K, T]) execute(r T) {
-	// Pop the item now that we're ready to process it
-	// There's a small chance this is a different item than the one we peeked before
+// Executes an item when it's time.
+func (p *Processor[K, T]) execute(expectedSeq uint64) {
+	// Pop the item now that we're ready to process it, verifying its sequence number still matches what was peeked
 	p.lock.Lock()
-	// For safety, let's peek at the first item before popping it and make sure it's the same object
-	// It's unlikely, but if it's a different object then restart the loop
-	peek, ok := p.queue.Peek()
-	if !ok || peek != r {
+	_, headSeq, ok := p.queue.PeekSeq()
+	if !ok || headSeq != expectedSeq {
 		p.lock.Unlock()
 		return
 	}
-	r, ok = p.queue.Pop()
+	r, ok := p.queue.Pop()
 	p.lock.Unlock()
 	if !ok {
 		return

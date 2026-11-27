@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
 	"syscall"
 )
@@ -96,6 +97,10 @@ func resolveCredential(userName string, groupName string) (*credential, error) {
 		Gid: uint32(os.Getgid()), //nolint:gosec // GIDs are 32-bit values
 	}
 	hasGroup := false
+	var (
+		userPrimaryGID    uint32
+		hasUserPrimaryGID bool
+	)
 
 	if userName != "" {
 		u, uid, err := lookupUser(userName)
@@ -110,6 +115,8 @@ func resolveCredential(userName string, groupName string) (*credential, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid primary group ID for user %q: %w", userName, err)
 			}
+			userPrimaryGID = cred.Gid
+			hasUserPrimaryGID = true
 			hasGroup = true
 
 			cred.Groups, err = supplementaryGroups(u)
@@ -126,6 +133,11 @@ func resolveCredential(userName string, groupName string) (*credential, error) {
 		}
 		cred.Gid = gid
 		hasGroup = true
+		if hasUserPrimaryGID && gid != userPrimaryGID {
+			cred.Groups = slices.DeleteFunc(cred.Groups, func(g uint32) bool {
+				return g == userPrimaryGID
+			})
+		}
 	}
 
 	// Falling back to the group of the current process could run the process with the root group

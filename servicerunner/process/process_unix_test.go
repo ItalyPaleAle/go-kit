@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -801,7 +802,13 @@ func TestResolveCredential(t *testing.T) {
 			name:  "user with a different group",
 			user:  "0",
 			group: "54322",
-			want:  &credential{Uid: 0, Gid: 54322, Groups: rootGroups},
+			want: &credential{
+				Uid: 0,
+				Gid: 54322,
+				Groups: slices.DeleteFunc(slices.Clone(rootGroups), func(g uint32) bool {
+					return g == 0
+				}),
+			},
 		},
 		{
 			name:  "numeric IDs not in the database",

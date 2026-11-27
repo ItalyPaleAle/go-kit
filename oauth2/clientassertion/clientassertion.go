@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,6 +27,17 @@ import (
 const AssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
 const kubernetesServiceAccountTokenPathDefault = "/var/run/secrets/kubernetes.io/serviceaccount/token" //nolint:gosec
+
+const (
+	maxTsiamResponseBytes = 64 << 10        // 64KB
+	maxTsiamExpiresInSec  = 365 * 24 * 3600 // 1 year
+)
+
+var defaultTsiamHTTPClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // ProviderFn returns the client assertion to include in a request to the token endpoint
 // It is invoked for every token request, so it returns either a fresh assertion or one it cached while it is still valid
@@ -78,7 +90,7 @@ func NewProvider(clientAssertion string, audience string) (ProviderFn, error) {
 
 	// tsiam
 	case strings.HasPrefix(clientAssertionLC, "tsiam="):
-		fn, err := tsiamProvider(clientAssertion[len("tsiam="):], audience, http.DefaultClient)
+		fn, err := tsiamProvider(clientAssertion[len("tsiam="):], audience, defaultTsiamHTTPClient)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tsiam client assertion provider: %w", err)
 		}
@@ -125,12 +137,25 @@ func tsiamProvider(endpoint string, audience string, client *http.Client) (Provi
 	if audience == "" {
 		return nil, errors.New("audience is empty")
 	}
+	if strings.TrimSpace(endpoint) == "" {
+		return nil, errors.New("endpoint URL is empty")
+	}
 
-	// Parse the URL
+	// Parse and validate the URL
 	u, err := url.Parse(strings.TrimSuffix(endpoint, "/") + "/token")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse endpoint URL: %w", err)
 	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid endpoint URL scheme %q: only http and https are permitted", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return nil, errors.New("endpoint URL must include a host")
+	}
+	if client == nil {
+		client = defaultTsiamHTTPClient
+	}
+
 	q := u.Query()
 	q.Set("resource", audience)
 	u.RawQuery = q.Encode()
@@ -151,6 +176,11 @@ func tsiamProvider(endpoint string, audience string, client *http.Client) (Provi
 
 	// Create the function
 	fn := func(parentCtx context.Context) (string, error) {
+		ctxErr := parentCtx.Err()
+		if ctxErr != nil {
+			return "", ctxErr
+		}
+
 		// Return the cached token if it is still valid
 		cacheMu.Lock()
 		if cachedToken != "" && time.Now().Before(cacheExpiry) {
@@ -159,8 +189,8 @@ func tsiamProvider(endpoint string, audience string, client *http.Client) (Provi
 		}
 		cacheMu.Unlock()
 
-		// Condense concurrent refresh requests into a single HTTP call
-		res, err, _ := sfGroup.Do("", func() (any, error) {
+		// Condense concurrent refresh requests into a single HTTP call while honoring each caller's context
+		resCh := sfGroup.DoChan("", func() (any, error) {
 			// Re-check the cache: another goroutine may have already refreshed it while we were waiting to enter the singleflight group
 			cacheMu.Lock()
 			if cachedToken != "" && time.Now().Before(cacheExpiry) {
@@ -183,39 +213,53 @@ func tsiamProvider(endpoint string, audience string, client *http.Client) (Provi
 			if rErr != nil {
 				return "", fmt.Errorf("error requesting token: %w", rErr)
 			}
-			defer resp.Body.Close() //nolint:errcheck
+			defer func() {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+				_ = resp.Body.Close()
+			}()
 
 			if resp.StatusCode != http.StatusOK {
 				return "", fmt.Errorf("error requesting token: response status is not OK: %d", resp.StatusCode)
 			}
 
 			var tokenResp tokenResponse
-			rErr = json.NewDecoder(resp.Body).Decode(&tokenResp)
+			rErr = json.NewDecoder(io.LimitReader(resp.Body, maxTsiamResponseBytes)).Decode(&tokenResp)
 			if rErr != nil {
 				return "", fmt.Errorf("error parsing response: %w", rErr)
 			}
 
-			// Cache the token only when the effective TTL (expiry minus 1m) is positive
+			accessToken := strings.TrimSpace(tokenResp.AccessToken)
+			if accessToken == "" {
+				return "", errors.New("error requesting token: access_token in response is empty")
+			}
+
+			// Cache the token only when the effective TTL (expiry minus 1m) is positive and within bounds
 			if tokenResp.ExpiresIn != "" {
 				expiresInSec, rErr := strconv.ParseInt(tokenResp.ExpiresIn, 10, 64)
-				if rErr == nil {
-					effectiveExpiry := time.Now().Add(time.Duration(expiresInSec)*time.Second - time.Minute)
+				if rErr == nil && expiresInSec > 0 {
+					clampedSec := min(expiresInSec, maxTsiamExpiresInSec)
+					effectiveExpiry := time.Now().Add(time.Duration(clampedSec)*time.Second - time.Minute)
 					if effectiveExpiry.After(time.Now()) {
 						cacheMu.Lock()
-						cachedToken = tokenResp.AccessToken
+						cachedToken = accessToken
 						cacheExpiry = effectiveExpiry
 						cacheMu.Unlock()
 					}
 				}
 			}
 
-			return tokenResp.AccessToken, nil
+			return accessToken, nil
 		})
-		if err != nil {
-			return "", err
-		}
 
-		return res.(string), nil //nolint:forcetypeassert
+		select {
+		case res := <-resCh:
+			if res.Err != nil {
+				return "", res.Err
+			}
+			return res.Val.(string), nil //nolint:forcetypeassert
+		case <-parentCtx.Done():
+			return "", parentCtx.Err()
+		}
 	}
 
 	return fn, nil

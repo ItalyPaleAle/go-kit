@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 )
 
@@ -43,6 +44,19 @@ func spoolBounded(body io.Reader, maxSize int64) (*os.File, int64, error) {
 	}
 
 	return file, size, nil
+}
+
+// uploadRequestBody builds a rewindable HTTP request body for a spooled file, using http.NoBody when size is zero so net/http sends Content-Length: 0 rather than chunked encoding
+func uploadRequestBody(file *os.File, size int64) (io.Reader, func() (io.ReadCloser, error)) {
+	if size == 0 {
+		return http.NoBody, func() (io.ReadCloser, error) {
+			return http.NoBody, nil
+		}
+	}
+
+	return io.NewSectionReader(file, 0, size), func() (io.ReadCloser, error) {
+		return io.NopCloser(io.NewSectionReader(file, 0, size)), nil
+	}
 }
 
 // Close a spool file and remove it from disk

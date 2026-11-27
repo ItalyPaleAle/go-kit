@@ -332,7 +332,7 @@ retryLoop:
 					retryAfter = time.Duration(seconds) * time.Second
 				}
 				w.log.WarnContext(ctx,
-					"Webhook throttled; will retry after delay",
+					"Webhook throttled, will retry after delay",
 					slog.Duration("delay", retryAfter),
 				)
 				select {
@@ -348,7 +348,7 @@ retryLoop:
 			// Retry after a delay on 408 (Request Timeout) and 5xx errors, which indicate a problem with the server
 			if res.StatusCode == http.StatusRequestTimeout || (res.StatusCode >= 500 && res.StatusCode < 600) {
 				w.log.WarnContext(ctx,
-					"Webhook returned an error response; will retry after delay",
+					"Webhook returned an error response, will retry after delay",
 					slog.Int("code", res.StatusCode),
 					slog.Duration("delay", w.retryInterval),
 				)
@@ -468,21 +468,13 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 		return nil, fmt.Errorf("error getting Slack-compatible message: %w", err)
 	}
 
-	// Build the body
-	pr, pw := io.Pipe()
-	go func() {
-		enc := json.NewEncoder(pw)
-		enc.SetEscapeHTML(false)
-		pErr := enc.Encode(message)
-		if pErr != nil {
-			_ = pw.CloseWithError(pErr)
-			return
-		}
-		_ = pw.Close()
-	}()
+	buf, err := encodeJSONBody(message)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode Slack-compatible message: %w", err)
+	}
 
 	// Create the request
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookUrl, pr)
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookUrl, buf)
 	if err != nil {
 		return nil, err
 	}

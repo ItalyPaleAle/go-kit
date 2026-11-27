@@ -673,6 +673,7 @@ func TestJitterStaysWithinBounds(t *testing.T) {
 func TestParseRetryAfter(t *testing.T) {
 	assert.Equal(t, 30*time.Second, parseRetryAfter("30"))
 	assert.Equal(t, backoffCap, parseRetryAfter("100000"))
+	assert.Equal(t, backoffCap, parseRetryAfter("18446744074"))
 	assert.Equal(t, time.Duration(0), parseRetryAfter(""))
 	assert.Equal(t, time.Duration(0), parseRetryAfter("0"))
 	assert.Equal(t, time.Duration(0), parseRetryAfter("-5"))

@@ -159,6 +159,11 @@ func TestLoadConfigFile_FileRefs(t *testing.T) {
 			want: fileRefsTestConfig{Token: "s3cr3t", Other: "x"},
 		},
 		{
+			name: "bare CR line endings in config file",
+			yaml: "# comment\rtoken: !file token.txt\rother: x\r",
+			want: fileRefsTestConfig{Token: "s3cr3t", Other: "x"},
+		},
+		{
 			name: "byte order mark in config file",
 			yaml: "\ufefftoken: !file token.txt\n",
 			want: fileRefsTestConfig{Token: "s3cr3t"},
@@ -304,4 +309,9 @@ func TestResolveFileRefs_PreservesLines(t *testing.T) {
 	got, err := resolveFileRefs(data, dir)
 	require.NoError(t, err)
 	assert.Equal(t, "a: 1\n\nb: \"multi\\nline\\nsecret\" # comment\nc: [x, \"multi\\nline\\nsecret\"]\n", string(got))
+
+	err = os.WriteFile(filepath.Join(dir, "binary.bin"), []byte{0xff, 0xfe, 0x00}, 0o600)
+	require.NoError(t, err)
+	_, err = resolveFileRefs([]byte("b: !file binary.bin\n"), dir)
+	require.ErrorContains(t, err, "not valid UTF-8")
 }

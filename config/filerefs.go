@@ -50,6 +50,11 @@ type fileRefReplacement struct {
 // The replacement happens on the source bytes rather than on a decoded yaml.Node tree, because decoding a yaml.Node ignores the decoder's KnownFields option, and re-encoding the tree changes the line numbers reported in decoding errors
 // Each reference is replaced with a double-quoted string on the same line, so the line numbers of the document do not change
 func resolveFileRefs(data []byte, baseDir string) ([]byte, error) {
+	// Check the UTF-16 BOM
+	if bytes.HasPrefix(data, []byte{0xfe, 0xff}) || bytes.HasPrefix(data, []byte{0xff, 0xfe}) {
+		return nil, errors.New("UTF-16 encoded configuration files are not supported")
+	}
+
 	// Most config files do not use these tags, so avoid parsing the document twice
 	if !bytes.Contains(data, []byte(tagFile)) && !bytes.Contains(data, []byte(tagEnvFile)) {
 		return data, nil
@@ -84,6 +89,10 @@ func resolveFileRefs(data []byte, baseDir string) ([]byte, error) {
 	out.Grow(len(data))
 	prev := 0
 	for _, repl := range replacements {
+		if repl.start < prev || repl.end < repl.start || repl.end > len(data) {
+			return nil, errors.New("could not resolve overlapping or out-of-bounds file references")
+		}
+
 		out.Write(data[prev:repl.start])
 		out.WriteString(repl.text)
 		prev = repl.end
@@ -221,6 +230,9 @@ func (r *fileRefResolver) resolve(node *yaml.Node) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("line %d: failed to read file referenced by %s: %w", node.Line, tagFile, err)
 		}
+		if !utf8.Valid(data) {
+			return "", fmt.Errorf("line %d: file referenced by %s is not valid UTF-8", node.Line, tagFile)
+		}
 
 		// Files usually end with a newline that's not part of the value, for example when written with echo
 		return strings.TrimRight(string(data), "\r\n"), nil
@@ -264,6 +276,9 @@ func (r *fileRefResolver) envFile(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read env file referenced by %s: %w", tagEnvFile, err)
 	}
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("env file '%s' referenced by %s is not valid UTF-8", path, tagEnvFile)
+	}
 
 	vars, err = parseDotenv(data)
 	if err != nil {
@@ -290,12 +305,13 @@ func quotedScalarEnd(data []byte, pos int, quote byte) int {
 	}
 
 	for i := pos + 1; i < len(data); i++ {
+		lineBreakLen := yamlLineBreakLen(data[i:])
 		switch {
-		case data[i] == '\n' || data[i] == '\r':
+		case lineBreakLen > 0:
 			return -1
 		case quote == '"' && data[i] == '\\':
 			// Skip the escaped character, unless it's an escaped line break which continues the scalar on the next line
-			if i+1 >= len(data) || data[i+1] == '\n' || data[i+1] == '\r' {
+			if i+1 >= len(data) || yamlLineBreakLen(data[i+1:]) > 0 {
 				return -1
 			}
 			i++
@@ -312,7 +328,7 @@ func quotedScalarEnd(data []byte, pos int, quote byte) int {
 	return -1
 }
 
-// lineOffsets returns the byte offset where each line of data starts
+// lineOffsets returns the byte offset where each line of data starts, matching goyaml.v3 line break rules
 func lineOffsets(data []byte) []int {
 	// The parser doesn't count a byte order mark as a column, so the first line starts after it
 	first := 0
@@ -321,12 +337,41 @@ func lineOffsets(data []byte) []int {
 	}
 
 	offsets := []int{first}
-	for i, c := range data {
-		if c == '\n' {
-			offsets = append(offsets, i+1)
+	for i := first; i < len(data); {
+		lbLen := yamlLineBreakLen(data[i:])
+		if lbLen > 0 {
+			i += lbLen
+			offsets = append(offsets, i)
+			continue
 		}
+		i++
 	}
 	return offsets
+}
+
+// yamlLineBreakLen returns the byte length of a YAML line break (\r\n, \n, \r, NEL U+0085, LS U+2028, or PS U+2029) at the start of b
+func yamlLineBreakLen(b []byte) int {
+	if len(b) == 0 {
+		return 0
+	}
+	switch b[0] {
+	case '\r':
+		if len(b) > 1 && b[1] == '\n' {
+			return 2
+		}
+		return 1
+	case '\n':
+		return 1
+	case 0xc2:
+		if len(b) > 1 && b[1] == 0x85 {
+			return 2
+		}
+	case 0xe2:
+		if len(b) > 2 && b[1] == 0x80 && (b[2] == 0xa8 || b[2] == 0xa9) {
+			return 3
+		}
+	}
+	return 0
 }
 
 func isYAMLSpace(c byte) bool {

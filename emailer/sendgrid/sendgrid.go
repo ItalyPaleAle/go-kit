@@ -12,6 +12,12 @@ import (
 	"github.com/italypaleale/go-kit/emailer/internal"
 )
 
+var defaultSendGridHTTPClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // SendGridEmailer is an Emailer that uses SendGrid.
 type SendGridEmailer struct {
 	apiKey     string
@@ -67,9 +73,11 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, to internal.EmailAddres
 		return err
 	}
 
-	// Build the v3 mail/send content array with text/plain first, adding text/html only when present
-	content := make([]SendGridContent, 1, 2)
-	content[0] = SendGridContent{Type: "text/plain", Value: message.Text}
+	// Build the v3 mail/send content array with text/plain first when present, omitting an empty text/plain part for HTML-only messages
+	content := make([]SendGridContent, 0, 2)
+	if message.Text != "" || message.HTML == "" {
+		content = append(content, SendGridContent{Type: "text/plain", Value: message.Text})
+	}
 	if message.HTML != "" {
 		content = append(content, SendGridContent{Type: "text/html", Value: message.HTML})
 	}
@@ -100,10 +108,10 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, to internal.EmailAddres
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	// Allow tests to inject a local client while defaulting to the shared HTTP transport in production
+	// Allow tests to inject a local client while defaulting to a redirect-disabled client in production
 	client := s.httpClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultSendGridHTTPClient
 	}
 
 	resp, err := client.Do(req)
@@ -111,7 +119,7 @@ func (s *SendGridEmailer) SendEmail(ctx context.Context, to internal.EmailAddres
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8<<10))
 		_ = resp.Body.Close()
 	}()
 
